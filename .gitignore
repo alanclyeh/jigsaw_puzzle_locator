@@ -1,0 +1,21 @@
+# Byte-compiled / optimized / DLL archive
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Project folders to ignore contents but keep directory
+data/*
+!data/.gitkeep
+log/*
+!log/.gitkeep
+output/*
+!output/.gitkeep
+
+# IDEs
+.vscode/
+.idea/
