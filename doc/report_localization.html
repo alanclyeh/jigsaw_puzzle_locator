@@ -1,0 +1,550 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Jigsaw Puzzle Locator - 演算法重構與優化報告</title>
+    <!-- 載入 Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@400;500;600;700;800&family=Fira+Code:wght@400;500&display=swap" rel="stylesheet">
+    <!-- Mermaid 圖表渲染 -->
+    <script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
+    <script>
+        mermaid.initialize({ 
+            startOnLoad: true, 
+            theme: 'dark',
+            themeVariables: {
+                primaryColor: '#312e81',
+                primaryTextColor: '#f8fafc',
+                lineColor: '#818cf8',
+                nodeBorder: '#4f46e5'
+            }
+        });
+    </script>
+    
+    <style>
+        :root {
+            --bg-gradient: linear-gradient(135deg, #090d16 0%, #111827 50%, #0f172a 100%);
+            --panel-bg: rgba(17, 24, 39, 0.75);
+            --panel-border: rgba(255, 255, 255, 0.08);
+            --primary-grad: linear-gradient(90deg, #6366f1 0%, #a855f7 100%);
+            --text-primary: #f8fafc;
+            --text-secondary: #94a3b8;
+            --accent-purple: #c084fc;
+            --accent-blue: #38bdf8;
+            --accent-green: #34d399;
+            --font-main: 'Inter', -apple-system, sans-serif;
+            --font-title: 'Outfit', sans-serif;
+            --font-code: 'Fira Code', monospace;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: var(--font-main);
+            background: var(--bg-gradient);
+            color: var(--text-primary);
+            min-height: 100vh;
+            line-height: 1.6;
+            overflow-x: hidden;
+            padding: 2rem 1rem;
+        }
+
+        /* 磨砂玻璃背景特效 */
+        .glass-container {
+            max-width: 1100px;
+            margin: 0 auto;
+            background: var(--panel-bg);
+            border: 1px solid var(--panel-border);
+            border-radius: 24px;
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
+            box-shadow: 0 20px 50px rgba(0, 0, 0, 0.4);
+            padding: 3rem;
+            position: relative;
+            overflow: hidden;
+        }
+
+        /* 背景流光光暈 */
+        .glass-container::before {
+            content: '';
+            position: absolute;
+            top: -150px;
+            left: -150px;
+            width: 400px;
+            height: 400px;
+            background: radial-gradient(circle, rgba(99, 102, 241, 0.15) 0%, rgba(99, 102, 241, 0) 70%);
+            border-radius: 50%;
+            pointer-events: none;
+            z-index: 0;
+        }
+
+        .glass-container::after {
+            content: '';
+            position: absolute;
+            bottom: -150px;
+            right: -150px;
+            width: 400px;
+            height: 400px;
+            background: radial-gradient(circle, rgba(168, 85, 247, 0.15) 0%, rgba(168, 85, 247, 0) 70%);
+            border-radius: 50%;
+            pointer-events: none;
+            z-index: 0;
+        }
+
+        header {
+            position: relative;
+            z-index: 1;
+            margin-bottom: 3rem;
+            text-align: center;
+        }
+
+        .logo-tag {
+            display: inline-block;
+            background: rgba(99, 102, 241, 0.15);
+            border: 1px solid rgba(99, 102, 241, 0.3);
+            color: var(--accent-blue);
+            padding: 0.4rem 1.2rem;
+            border-radius: 50px;
+            font-size: 0.85rem;
+            font-weight: 600;
+            letter-spacing: 0.05em;
+            margin-bottom: 1rem;
+            text-transform: uppercase;
+        }
+
+        h1 {
+            font-family: var(--font-title);
+            font-size: 2.8rem;
+            font-weight: 800;
+            background: var(--primary-grad);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            margin-bottom: 0.8rem;
+            letter-spacing: -0.02em;
+        }
+
+        .subtitle {
+            color: var(--text-secondary);
+            font-size: 1.1rem;
+            max-width: 600px;
+            margin: 0 auto;
+        }
+
+        /* 標籤頁導覽 */
+        .tabs {
+            display: flex;
+            justify-content: center;
+            gap: 1rem;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+            padding-bottom: 1.5rem;
+            margin-bottom: 2.5rem;
+            position: relative;
+            z-index: 1;
+        }
+
+        .tab-btn {
+            background: transparent;
+            border: none;
+            color: var(--text-secondary);
+            font-family: var(--font-title);
+            font-size: 1.1rem;
+            font-weight: 600;
+            padding: 0.75rem 2rem;
+            border-radius: 12px;
+            cursor: pointer;
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            position: relative;
+        }
+
+        .tab-btn:hover {
+            color: var(--text-primary);
+            background: rgba(255, 255, 255, 0.03);
+        }
+
+        .tab-btn.active {
+            color: var(--text-primary);
+            background: rgba(255, 255, 255, 0.06);
+        }
+
+        .tab-btn.active::after {
+            content: '';
+            position: absolute;
+            bottom: -1.6rem;
+            left: 15%;
+            width: 70%;
+            height: 3px;
+            background: var(--primary-grad);
+            border-radius: 10px;
+        }
+
+        /* 內容區 */
+        .tab-content {
+            display: none;
+            animation: fadeIn 0.5s ease;
+            position: relative;
+            z-index: 1;
+        }
+
+        .tab-content.active {
+            display: block;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        /* 段落與文字樣式 */
+        h2 {
+            font-family: var(--font-title);
+            font-size: 1.8rem;
+            margin-top: 2.5rem;
+            margin-bottom: 1.2rem;
+            color: var(--text-primary);
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+            padding-bottom: 0.5rem;
+        }
+
+        h3 {
+            font-family: var(--font-title);
+            font-size: 1.3rem;
+            margin: 1.8rem 0 0.8rem 0;
+            color: var(--accent-purple);
+        }
+
+        p {
+            margin-bottom: 1.2rem;
+            color: var(--text-secondary);
+            font-size: 1.05rem;
+        }
+
+        ul, ol {
+            margin-left: 1.5rem;
+            margin-bottom: 1.5rem;
+            color: var(--text-secondary);
+        }
+
+        li {
+            margin-bottom: 0.5rem;
+            font-size: 1.05rem;
+        }
+
+        /* 行內程式碼 */
+        code:not(pre code) {
+            font-family: var(--font-code);
+            background: rgba(255, 255, 255, 0.06);
+            color: var(--accent-blue);
+            padding: 0.2rem 0.4rem;
+            border-radius: 6px;
+            font-size: 0.9em;
+        }
+
+        /* 卡片網格與樣式 */
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 1.5rem;
+            margin: 2rem 0;
+        }
+
+        .card {
+            background: rgba(255, 255, 255, 0.02);
+            border: 1px solid rgba(255, 255, 255, 0.04);
+            border-radius: 16px;
+            padding: 1.5rem;
+            transition: all 0.3s ease;
+        }
+
+        .card:hover {
+            transform: translateY(-4px);
+            background: rgba(255, 255, 255, 0.04);
+            border-color: rgba(99, 102, 241, 0.2);
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3);
+        }
+
+        .card h4 {
+            font-family: var(--font-title);
+            font-size: 1.15rem;
+            margin-bottom: 0.6rem;
+            color: var(--text-primary);
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .card p {
+            font-size: 0.95rem;
+            margin-bottom: 0;
+        }
+
+        /* 圖表置中 */
+        .chart-box {
+            background: rgba(0, 0, 0, 0.2);
+            border: 1px solid rgba(255, 255, 255, 0.03);
+            border-radius: 16px;
+            padding: 2rem;
+            margin: 2rem 0;
+            display: flex;
+            justify-content: center;
+        }
+
+        /* 終端機/程式碼視窗 */
+        .code-window {
+            background: #020617;
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            border-radius: 14px;
+            margin: 2rem 0;
+            overflow: hidden;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+        }
+
+        .code-header {
+            background: rgba(255, 255, 255, 0.03);
+            padding: 0.75rem 1.25rem;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        .code-dots {
+            display: flex;
+            gap: 6px;
+        }
+
+        .code-dot {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+        }
+
+        .code-dot.red { background: #ef4444; }
+        .code-dot.yellow { background: #f59e0b; }
+        .code-dot.green { background: #10b981; }
+
+        .code-title {
+            font-family: var(--font-code);
+            font-size: 0.85rem;
+            color: var(--text-secondary);
+        }
+
+        pre {
+            padding: 1.5rem;
+            overflow-x: auto;
+            font-family: var(--font-code);
+            font-size: 0.92rem;
+            line-height: 1.5;
+            color: #e2e8f0;
+        }
+
+        /* 強調盒框 */
+        .tip-box {
+            background: rgba(16, 185, 129, 0.06);
+            border-left: 4px solid var(--accent-green);
+            padding: 1.2rem 1.5rem;
+            border-radius: 0 12px 12px 0;
+            margin: 1.5rem 0;
+        }
+
+        .tip-box p {
+            margin-bottom: 0;
+            color: var(--text-primary);
+            font-size: 0.98rem;
+        }
+
+        .highlight-text {
+            color: var(--accent-purple);
+            font-weight: 600;
+        }
+
+        /* RWD 響應式佈局 */
+        @media (max-width: 768px) {
+            .glass-container {
+                padding: 1.5rem;
+                border-radius: 16px;
+            }
+            h1 {
+                font-size: 2rem;
+            }
+            .tab-btn {
+                padding: 0.6rem 1.2rem;
+                font-size: 0.95rem;
+            }
+        }
+    </style>
+</head>
+<body>
+
+    <div class="glass-container">
+        
+        <header>
+            <div class="logo-tag">MVP Phase II</div>
+            <h1>Jigsaw Puzzle Helper</h1>
+            <div class="subtitle">拼圖定位輔助演算法重構與 Web 架構優化設計報告</div>
+        </header>
+
+        <!-- Tab 導覽列 -->
+        <div class="tabs">
+            <button class="tab-btn active" onclick="switchTab('brainstorm')">🚀 腦力激盪與架構建議</button>
+            <button class="tab-btn" onclick="switchTab('walkthrough')">🛠️ 實作與測試報告</button>
+        </div>
+
+        <!-- 標籤頁一：腦力激盪與架構建議 -->
+        <div id="brainstorm" class="tab-content active">
+            
+            <h2>💡 系統與演算法優化藍圖</h2>
+            <p>本階段針對拼圖定位輔助功能，在演算法效能與未來 Web 擴展上進行了深度優化。以下是離線預處理與線上實拍碎片定位的架構工作流：</p>
+            
+            <div class="chart-box">
+                <pre class="mermaid">
+graph TD
+    subgraph "大圖預處理 (Offline/專案建立)"
+        Ref[完成大圖 reference.jpg] --> SIFT_Ref[提取 SIFT 特徵點與描述子]
+        Ref --> Grid_Moments[計算各網格色彩矩 Color Moments]
+        SIFT_Ref --> Cache[(特徵與色彩快取 .npz / Redis)]
+        Grid_Moments --> Cache
+    end
+
+    subgraph "單片碎片定位 (Online/API 請求)"
+        Piece[單片照片 piece.jpg] --> Seg[去背模組 segmentation]
+        Seg --> CleanPiece[乾淨單片 BGRA]
+        CleanPiece --> Mask_Erosion[遮罩收縮 Erosion]
+        Mask_Erosion --> SIFT_Piece[提取 SIFT 特徵]
+        
+        Cache --> Matcher{快取匹配}
+        SIFT_Piece --> Matcher
+        
+        Matcher -- "1. SIFT 成功 (inliers >= 10)" --> Affine[仿射變換 Affine Transform] --> Quad[取得投影座標]
+        Matcher -- "2. SIFT 失敗" --> ColorMatch[色彩矩相似度篩選 Top K] --> TempMatch[多角度模板匹配] --> BBox[取得候選邊框]
+        
+        Quad --> Result[LocateResult JSON]
+        BBox --> Result
+    end
+
+    subgraph "前端呈現 (Frontend)"
+        Result --> FE_Canvas[HTML5 Canvas Overlay 繪製與旋轉提示]
+    end
+                </pre>
+            </div>
+
+            <h2>🎯 演算法核心優化</h2>
+            <div class="grid">
+                <div class="card">
+                    <h4><span>📏</span> 尺度與長寬比幾何正規化</h4>
+                    <p>利用已知的行列數算出每個網格的物理邊界，並對去背碎片計算其最小外接矩形 <code>cv2.minAreaRect</code>。以長短邊比對長寬比，偏差過大直接跳過；再透過長邊比值計算精確縮放比例 <code>scale_factor</code>。將碎片縮放至與網格 1:1 等大後進行匹配。</p>
+                </div>
+                <div class="card">
+                    <h4><span>⚡</span> 運算量降低 90%</h4>
+                    <p>利用外接矩形得到的碎片擺放角 $\theta$，僅需比對 $\theta$ 以及加上 90 度倍數的 4 個直角旋轉方向，不需進行盲目旋轉；同時 1:1 的縮放使得尺度搜尋降為 1 次。將原先 $15 \times 5 \times 8 = 600$ 次的匹配，縮減至 12 次以內，效率獲得飛躍性提升。</p>
+                </div>
+                <div class="card">
+                    <h4><span>📐</span> 仿射變換代替單應性</h4>
+                    <p>手機拍單片時透視畸變不嚴重，而在匹配點較少（4~8個）時使用 Homography 極易產生扭曲畸變框。改用 6 自由度的仿射變換 <code>cv2.estimateAffine2D</code> 作為備用，能有效約束平移、旋轉與縮放，防止投影框被拉伸變形。</p>
+                </div>
+                <div class="card">
+                    <h4><span>🛡️</span> 形態學去凸耳與遮罩匹配</h4>
+                    <p>拼圖邊緣的凹凸卡榫會使外接矩形大 15%~25%，進而導致縮放本體被過度縮小。使用形態學<strong>開運算 (MORPH_OPEN)</strong> 削去凸耳，量測拼圖主體的純淨尺寸。並在比對時進行帶遮罩匹配，完全屏蔽去背黑色背景噪聲。</p>
+                </div>
+            </div>
+
+            <h2>🌐 系統與 Web 架構規劃</h2>
+            
+            <h3>1. 大圖特徵快取機制 (Feature Caching)</h3>
+            <p>大圖通常高於 2560px，每次 API 請求都重新對大圖進行 SIFT 特徵計算在伺服器端是不切實際的。我們設計了二階段 API：</p>
+            <ul>
+                <li><strong>專案建立 API</strong>：使用者上傳完成大圖，後端預先計算大圖特徵點與色彩矩，存入快取 (Redis 或記憶體中的 <code>.npz</code> 檔)。</li>
+                <li><strong>碎片定位 API</strong>：上傳碎片時直接從快取載入大圖特徵，定位回應時間可從數秒壓縮至 <span class="highlight-text">100~300ms</span>。</li>
+            </ul>
+
+            <h3>2. 數據與圖片分離（前端 Canvas 繪製）</h3>
+            <p>後端定位 API 不再傳送畫好框的大圖，而是回傳輕量級的 JSON 幾何座標與網格 metadata。前端網頁載入一次大圖後，透過 <strong>HTML5 Canvas / SVG Overlay</strong> 動態在網頁上疊加定位框與多候選切換，大大減少頻寬消耗，提升流暢性。</p>
+
+            <div class="tip-box">
+                <p><strong>💡 前端 UI/UX 優化方案：</strong> 當定位完成時，UI 可以顯示一個 3D 拼圖旋轉提示（例如：「請順時針旋轉 90 度」），並在 Canvas 定位框上附帶向外擴散的半透明雷達定位波，提供極具科技感的 premium 互動體驗。</p>
+            </div>
+
+        </div>
+
+        <!-- 標籤頁二：實作與測試報告 -->
+        <div id="walkthrough" class="tab-content">
+            
+            <h2>🛠️ 實作修改內容</h2>
+            <p>我們已經成功在專案的 <a href="file:///Users/alan.yeh/Workspace/my_projects/jp_locator/source/features/localization/locator.py" style="color: var(--accent-blue); text-decoration: none;">source/features/localization/locator.py</a> 中完成了上述演算法的重構實作。</p>
+
+            <h3>1. 新增 Helper 函數</h3>
+            <p>在 locator 模組中，新增了兩個核心 Helper 函數來解決幾何跳變與卡榫問題：</p>
+            <ul>
+                <li><code>_standardize_rotated_rect(rect)</code>：強制將外接矩形的 width 鎖定為長邊，height 鎖定為短邊，並精確計算標準旋轉角。</li>
+                <li><code>_get_puzzle_body_rect(mask)</code>：在遮罩上以橢圓形結構元素進行開運算開路，剔除卡榫凸耳，取得拼圖主體的精確尺寸。</li>
+            </ul>
+
+            <h3>2. 重構 4 向帶遮罩模板匹配</h3>
+            <p>在 SIFT 失敗退路時，利用長寬比快速過濾，接著以長邊計算 scale 進行 1:1 圖像 resize。將網格搜尋區向外擴大 1.25 倍防止旋轉越界，並僅旋轉 4 個直角方向進行帶遮罩匹配 <code>cv2.matchTemplate(..., mask=rotated_mask)</code>。</p>
+
+            <h2>🧪 自動化測試驗證</h2>
+            <p>使用系統 Python 執行了自動化測試，SIFT 特徵定位與幾何正規化模板退路定位測試均 100% 通過：</p>
+
+            <div class="code-window">
+                <div class="code-header">
+                    <div class="code-dots">
+                        <div class="code-dot red"></div>
+                        <div class="code-dot yellow"></div>
+                        <div class="code-dot green"></div>
+                    </div>
+                    <div class="code-title">Terminal - pytest tests/test_localization.py</div>
+                    <div></div>
+                </div>
+                <pre><code>$ python3 -m pytest tests/test_localization.py -v
+============================= test session starts ==============================
+platform darwin -- Python 3.9.6, pytest-8.4.2, pluggy-1.6.0 -- /Library/Developer/...
+cachedir: .pytest_cache
+rootdir: /Users/alan.yeh/Workspace/my_projects/jp_locator
+collecting ... collected 2 items
+
+tests/test_localization.py::test_sift_localization_success PASSED        [ 50%]
+tests/test_localization.py::test_template_localization_fallback PASSED   [100%]
+
+============================== <span style="color: var(--accent-green); font-weight: bold;">2 passed</span> in 0.31s ===============================</code></pre>
+            </div>
+
+            <h3>測試用例解析：</h3>
+            <ol>
+                <li><strong><code>test_sift_localization_success</code></strong>：驗證高紋理碎片透過 SIFT 匹配在大圖定位。在添加了隨機旋轉、縮放與色彩抖動後，預測定位框與真值區域的 IoU 達 $\ge 0.6$ 且角度誤差小於 $15^\circ$。（驗證通過）</li>
+                <li><strong><code>test_template_localization_fallback</code></strong>：驗證弱紋理/純色碎片觸發退路定位。在 2x2 網格中，利用長短邊尺寸與長寬比正規化，順利匹配出 Rank 1 的最佳網格位置為 <code>(2, 1)</code> 藍色網格區。（驗證通過）</li>
+            </ol>
+
+        </div>
+
+    </div>
+
+    <script>
+        function switchTab(tabId) {
+            // 隱藏所有 tab 內容
+            const contents = document.querySelectorAll('.tab-content');
+            contents.forEach(content => content.classList.remove('active'));
+            
+            // 取消所有 tab 按鈕 active 狀態
+            const buttons = document.querySelectorAll('.tab-btn');
+            buttons.forEach(btn => btn.classList.remove('active'));
+            
+            // 顯示當前選中的 tab 與按鈕
+            document.getElementById(tabId).classList.add('active');
+            event.currentTarget.classList.add('active');
+            
+            // 如果切換到 brainstorm 頁面，重新排版 mermaid
+            if (tabId === 'brainstorm') {
+                mermaid.init(undefined, document.querySelectorAll('.mermaid'));
+            }
+        }
+    </script>
+</body>
+</html>

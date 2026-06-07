@@ -1,0 +1,127 @@
+import cv2
+import numpy as np
+import pytest
+from tests._synthetic import generate_synthetic_piece
+from source.features.localization.locator import locate_piece
+
+def calc_iou(boxA, boxB):
+    xA = max(boxA[0], boxB[0])
+    yA = max(boxA[1], boxB[1])
+    xB = min(boxA[0] + boxA[2], boxB[0] + boxB[2])
+    yB = min(boxA[1] + boxA[3], boxB[1] + boxB[3])
+    
+    interArea = max(0, xB - xA) * max(0, yB - yA)
+    boxAArea = boxA[2] * boxA[3]
+    boxBArea = boxB[2] * boxB[3]
+    
+    iou = interArea / float(boxAArea + boxBArea - interArea) if (boxAArea + boxBArea - interArea) > 0 else 0
+    return iou
+
+def create_textured_image() -> np.ndarray:
+    """產生具有豐富紋理的影像"""
+    img = np.zeros((300, 300, 3), dtype=np.uint8)
+    np.random.seed(42)
+    # 畫上隨機線條、圓形和色塊
+    for _ in range(150):
+        color = (int(np.random.randint(0, 255)), int(np.random.randint(0, 255)), int(np.random.randint(0, 255)))
+        center = (int(np.random.randint(10, 290)), int(np.random.randint(10, 290)))
+        radius = int(np.random.randint(5, 30))
+        cv2.circle(img, center, radius, color, -1)
+    # 加入高斯噪聲以增加特徵點
+    noise = np.random.normal(0, 10, img.shape).astype(np.int16)
+    img = np.clip(img.astype(np.int16) + noise, 0, 255).astype(np.uint8)
+    return img
+
+def create_low_texture_image() -> np.ndarray:
+    """產生由四個大純色區塊組成的影像"""
+    img = np.zeros((300, 300, 3), dtype=np.uint8)
+    img[0:150, 0:150] = [0, 0, 255]       # 紅色區 (BGR: 0, 0, 255)
+    img[0:150, 150:300] = [0, 255, 0]     # 綠色區 (BGR: 0, 255, 0)
+    img[150:300, 0:150] = [255, 0, 0]     # 藍色區 (BGR: 255, 0, 0)
+    img[150:300, 150:300] = [0, 255, 255]   # 黃色區 (BGR: 0, 255, 255)
+    return img
+
+def test_sift_localization_success():
+    """驗證高紋理拼圖塊的 SIFT 定位效能"""
+    ref = create_textured_image()
+    # 地點：大圖中央的 (100, 100, 80, 80)
+    gt_bbox = (100, 100, 80, 80)
+    
+    # 施加旋轉、縮放與透視變形
+    applied_rot = 30.0
+    applied_scale = 1.0
+    piece_bgra, _ = generate_synthetic_piece(
+        ref, gt_bbox, 
+        rotation_deg=applied_rot, 
+        scale=applied_scale,
+        perspective_shift_ratio=0.01,
+        brightness_shift=0.05,
+        contrast_shift=-0.05,
+        blur_kernel_size=0
+    )
+    
+    # 定位
+    res = locate_piece(ref, piece_bgra, rows=3, cols=3)
+    
+    print(f"\n[DEBUG SIFT]")
+    print(f"res.method: {res.method}")
+    print(f"res.confidence: {res.confidence}")
+    print(f"res.bounding_box: {res.bounding_box}")
+    print(f"res.rotation_deg: {res.rotation_deg}")
+    
+    assert res.method == "feature"
+    assert res.bounding_box is not None
+    
+    # 驗證 IoU
+    iou = calc_iou(res.bounding_box, gt_bbox)
+    assert iou >= 0.6
+    
+    # 驗證旋轉角誤差 (在 15 度以內)
+    # 注意：旋轉角的差需要處理 360 度週期性
+    rot_diff = abs(res.rotation_deg - applied_rot) % 360
+    if rot_diff > 180:
+        rot_diff = 360 - rot_diff
+    assert rot_diff <= 15.0
+
+def test_template_localization_fallback():
+    """驗證低紋理 (純色) 拼圖塊的退路定位機制"""
+    ref = create_low_texture_image()
+    # 藍色區域: y=[150:300], x=[0:150]
+    # 在藍色區域內部裁切一小塊 (180, 50, 40, 40)
+    gt_bbox = (50, 180, 40, 40) # x=50, y=180, w=40, h=40
+    
+    applied_rot = 0.0
+    applied_scale = 1.0
+    piece_bgra, _ = generate_synthetic_piece(
+        ref, gt_bbox, 
+        rotation_deg=applied_rot, 
+        scale=applied_scale,
+        perspective_shift_ratio=0.0,
+        brightness_shift=0.0,
+        contrast_shift=0.0,
+        blur_kernel_size=0
+    )
+    
+    # 傳入 rows=2, cols=2 參數
+    # 這時藍色區剛好落在第 2 行，第 1 列 (row=2, col=1)
+    res = locate_piece(ref, piece_bgra, rows=2, cols=2)
+    
+    print(f"\n[DEBUG TEMPLATE]")
+    print(f"res.method: {res.method}")
+    print(f"res.grid_pos: {res.grid_pos}")
+    print(f"res.bounding_box: {res.bounding_box}")
+    print(f"res.confidence: {res.confidence}")
+    print(f"res.candidates: {res.candidates}")
+    
+    assert res.method == "template"
+    assert len(res.candidates) >= 1
+    
+    # 檢查 Rank 1 候選框的網格位置是否為 (row=2, col=1)
+    assert res.grid_pos == (2, 1)
+    
+    # 檢查 Rank 1 的中心點是否確實落在網格 (2, 1) 內 (x: 0~150, y: 150~300)
+    bx, by, bw, bh = res.bounding_box
+    cx = bx + bw / 2.0
+    cy = by + bh / 2.0
+    assert 0 <= cx <= 150
+    assert 150 <= cy <= 300
