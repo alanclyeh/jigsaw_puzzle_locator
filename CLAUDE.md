@@ -25,3 +25,9 @@
 *   **尺度正規化**：以 `scale_factor = L_grid / L_piece` 將碎片與大圖網格對齊至 1:1 後再比對，避免多尺度搜索。
 *   **4向直角旋轉**：只測試 `aligned_angle + [0, 90, 180, 270]` 四個方向。
 *   **帶遮罩匹配**：必須在 `cv2.matchTemplate` 中傳入遮罩，並將搜尋區擴大 1.25 倍防止越界。
+
+## Git Workflow & Code Review (Critical)
+*   **分支策略**：後續所有修改**禁止**直接 Push 到 `main` 分支。必須建立新的 feature 分支（例如 `feature/xxx`）進行開發。
+*   **代碼審查 (Code Review)**：修改完成後，須先推送到 GitHub 建立 Pull Request (PR)，並將變更提交給另一個 Agent 進行 Review。
+*   **合併機制**：審查通過後，方可將 PR 合併回 `main` 分支。
+
