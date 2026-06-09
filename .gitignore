@@ -8,9 +8,8 @@ __pycache__/
 .DS_Store
 Thumbs.db
 
-# Project folders to ignore contents but keep directory
-data/*
-!data/.gitkeep
+data/output/
+data/report*
 log/*
 !log/.gitkeep
 output/*
