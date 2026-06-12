@@ -18,3 +18,4 @@ output/*
 # IDEs
 .vscode/
 .idea/
+scratch/
