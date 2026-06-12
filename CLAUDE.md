@@ -20,11 +20,12 @@
 *   **實作機制**：此功能已透過 [tests/conftest.py](file:///Users/alan.yeh/Workspace/my_projects/jp_locator/tests/conftest.py) 中的 `pytest_terminal_summary` hook 自動化實作。
 *   **邊界限制**：在後續的任何開發與重構中，**不可刪除、註解或破壞 `conftest.py` 中的自動報告生成邏輯**。若測試檔案有新增，報告應自動適配。
 
-### 2. 幾何正規化演算法規範 (Locator)
-*   **外接矩形**：提取碎片特徵與匹配前，必須使用 `_get_puzzle_body_rect()` 削去凸耳，再使用 `_standardize_rotated_rect()` 將寬度對齊長邊以獲取唯一的標準旋轉角。
-*   **尺度正規化**：以 `scale_factor = L_grid / L_piece` 將碎片與大圖網格對齊至 1:1 後再比對，避免多尺度搜索。
-*   **4向直角旋轉**：只測試 `aligned_angle + [0, 90, 180, 270]` 四個方向。
-*   **帶遮罩匹配**：必須在 `cv2.matchTemplate` 中傳入遮罩，並將搜尋區擴大 1.25 倍防止越界。
+### 2. 幾何正規化演算法規範 (Locator) — v1.2.0（依真實照片實證修訂，詳見 doc/dev_log_plan2.md）
+*   **主體量測**：提取碎片特徵與匹配前，必須使用 `_get_puzzle_body_rect()` + `_standardize_rotated_rect()` 取得初始矩形角，再以 `_measure_body()`（投影中位數）量測主體長寬。實測純開運算量測在實拍凸耳較寬時高估達 18%+，不可單獨使用。
+*   **尺度正規化**：以 `scale_factor = L_grid / L_piece_body` 將碎片與大圖網格對齊至 1:1 後再比對，僅以小幅尺度掃描（±6%）容忍量測誤差，不做大範圍多尺度搜索。
+*   **全姿態掃描（取代 4 向直角旋轉）**：實測 minAreaRect 對齊角在帶凸耳實拍遮罩上誤差達 ±40°，**禁止只測 4 個直角方向**。保底層必須以全 360°（3° 步進）姿態掃描，分數採中心對齊逐像素 max 累積。
+*   **帶遮罩 ZNCC 匹配**：高紋理碎片必須使用 `_masked_zncc_map()`（FFT 分解的帶遮罩零均值正規化相關，亮度/對比不變）。**禁止以 `TM_CCORR_NORMED` 作為主要評分**（存在亮度方向偏置，深色碎片對任意亮區得高分）；僅低紋理碎片（灰階變異 < 10、ZNCC 退化）退用彩色帶遮罩 `TM_CCORR_NORMED`。
+*   **歷史教訓（禁止重新引入）**：色彩直方圖網格 Top-K 預過濾（GT 排名實測 354~735/1000，碎片橫跨 4 網格使網格對齊直方圖失效）；對實拍碎片照依賴 SIFT 描述子（GT 區域 affine inliers 實測 = 0）。
 
 ## Git Workflow & Code Review (Critical)
 *   **分支策略**：後續所有修改**禁止**直接 Push 到 `main` 分支。必須建立新的 feature 分支（例如 `feature/xxx`）進行開發。

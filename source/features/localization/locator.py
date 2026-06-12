@@ -166,7 +166,8 @@ def _masked_zncc_map(f: np.ndarray, f2: np.ndarray, t: np.ndarray, m: np.ndarray
     num = A - B * (st / n)
     var_f = np.maximum(C - (B * B) / n, 0.0)
     var_t = max(st2 - st * st / n, 1e-6)
-    return num / (np.sqrt(var_f * var_t) + 1e-6)
+    # FFT 浮點誤差在近零變異視窗可能使分數輕微越界，夾限避免 max 累積偏好虛高分
+    return np.clip(num / (np.sqrt(var_f * var_t) + 1e-6), -1.0, 1.0)
 
 def _global_pose_sweep(
     reference: np.ndarray,
@@ -285,10 +286,11 @@ def locate_piece(
     # 1.5 尺度正規化 (CLAUDE.md 規範)：scale_factor = L_grid / L_piece
     # 以「投影中位數」量測主體 (對凸耳穩健)，將碎片縮放至與大圖網格 1:1，
     # 消除實拍單片與大圖網格間 3~4 倍的尺度落差。
+    # rows/cols 未提供時以預設 15x15 網格正規化，使模板保底層的尺度假設一致成立
     body_w, body_h, aligned_angle = _measure_body(piece_alpha)
     body_long = max(body_w, body_h)
     piece_norm_scale = 1.0
-    if rows is not None and cols is not None and body_long > 1.0:
+    if body_long > 1.0:
         piece_norm_scale = L_grid / body_long
         if not (0.05 <= piece_norm_scale <= 20.0):
             piece_norm_scale = 1.0
@@ -377,11 +379,12 @@ def locate_piece(
                         sift_success = True
                         confidence = min(1.0, inliers_count / 20.0 * 0.7 + inliers_ratio * 0.3)
                         quad = quad_candidate
+                        bx0, by0 = max(0, int(x_min)), max(0, int(y_min))
                         bounding_box = (
-                            max(0, int(x_min)),
-                            max(0, int(y_min)),
-                            min(ref_w, int(x_max - x_min)),
-                            min(ref_h, int(y_max - y_min))
+                            bx0,
+                            by0,
+                            min(ref_w - bx0, int(x_max - x_min)),
+                            min(ref_h - by0, int(y_max - y_min))
                         )
 
                         rotation_rad = np.arctan2(H_scaled[1, 0], H_scaled[0, 0])
@@ -419,11 +422,12 @@ def locate_piece(
                             sift_success = True
                             confidence = min(1.0, inliers_count / 15.0 * 0.7 + inliers_ratio * 0.3)
                             quad = quad_candidate
+                            bx0, by0 = max(0, int(x_min)), max(0, int(y_min))
                             bounding_box = (
-                                max(0, int(x_min)),
-                                max(0, int(y_min)),
-                                min(ref_w, int(x_max - x_min)),
-                                min(ref_h, int(y_max - y_min))
+                                bx0,
+                                by0,
+                                min(ref_w - bx0, int(x_max - x_min)),
+                                min(ref_h - by0, int(y_max - y_min))
                             )
                             rotation_rad = np.arctan2(M[1, 0], M[0, 0])
                             rotation_deg = np.degrees(rotation_rad) % 360

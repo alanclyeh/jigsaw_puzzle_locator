@@ -75,3 +75,18 @@
   - 每張真實照片掃描 ~60s，可用「粗掃（1/4 解析度、6° 步進）→ 候選區精掃」兩階段加速。
   - 樣本數僅 4 張，建議補拍更多單片（特別是低紋理、邊角片）擴充驗證集。
 
+---
+
+## Round 4 — Code Review 修正（全部通過 ✅）
+
+報告：`output/report_round_4.html`
+
+Reviewer Agent 對 PR 分支判定 REQUEST CHANGES（核心數學驗證正確、無 Critical），依其 Important 清單修正：
+
+1. **SIFT 路徑 bbox 夾限不完整**：`min(ref_w, w)` 未扣除起點，bbox 可超出影像右/下邊界最多一格 → 改為 `min(ref_w - bx0, w)`（Homography 與 Affine fallback 兩處）。
+2. **CLAUDE.md 規範與實作衝突**：第 2 節「4 向直角旋轉」「TM_CCORR_NORMED 帶遮罩匹配」已被實證推翻 → 同步更新為 v1.2.0 規範（投影中位數量測、全姿態掃描、帶遮罩 ZNCC、歷史教訓清單），防止後續 Agent 把正確實作「修回」舊規範。
+3. **rows/cols=None 時尺度假設矛盾**：模板保底層註解宣稱「已正規化」但 None 時未正規化 → 改為一律以（預設 15×15）網格做尺度正規化。
+4. **ZNCC 分數夾限 [-1, 1]**：消除 FFT 浮點誤差在近零變異視窗的虛高分。
+
+複跑結果：**7 passed**（無回歸）。Reviewer 其餘 Suggestions（print→logging、`locate_piece` 拆函式、向量化 `_measure_body`、兩階段加速）列為後續優化，不阻塞合併。
+
