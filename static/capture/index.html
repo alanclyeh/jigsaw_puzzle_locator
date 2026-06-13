@@ -1,0 +1,311 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>拼圖單片採集</title>
+<style>
+  :root { --bg:#0d1117; --panel:#161b22; --line:#30363d; --accent:#2f81f7; --ok:#3fb950; --warn:#f85149; --text:#e6edf3; --muted:#8b949e; }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { margin:0; height:100%; background:var(--bg); color:var(--text); font-family:-apple-system,"Helvetica Neue",system-ui,sans-serif; }
+  body { display:flex; flex-direction:column; }
+  header { padding:10px 14px; font-size:16px; font-weight:600; border-bottom:1px solid var(--line); display:flex; justify-content:space-between; align-items:center; }
+  header .sub { font-size:12px; color:var(--muted); font-weight:400; }
+  #stage { position:relative; flex:1; min-height:0; background:#000; overflow:hidden; display:flex; align-items:center; justify-content:center; }
+  #video, #frozen { max-width:100%; max-height:100%; display:block; }
+  #frozen { display:none; }
+  /* 即時定位框 */
+  #guide { position:absolute; border:2px dashed var(--accent); box-shadow:0 0 0 9999px rgba(0,0,0,.35); pointer-events:none; display:none; }
+  /* 編輯狀態裁切框 */
+  #cropLayer { position:absolute; inset:0; display:none; touch-action:none; }
+  #cropBox { position:absolute; border:2px solid var(--ok); box-shadow:0 0 0 9999px rgba(0,0,0,.5); }
+  .handle { position:absolute; width:26px; height:26px; background:var(--ok); border:2px solid #fff; border-radius:50%; transform:translate(-50%,-50%); }
+  .handle.tl{left:0;top:0;} .handle.tr{left:100%;top:0;} .handle.bl{left:0;top:100%;} .handle.br{left:100%;top:100%;}
+  .controls { padding:10px 14px; border-top:1px solid var(--line); background:var(--panel); display:flex; flex-direction:column; gap:10px; }
+  .row { display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+  .row label { font-size:13px; color:var(--muted); min-width:46px; }
+  input[type=number] { width:90px; padding:10px; font-size:18px; background:var(--bg); color:var(--text); border:1px solid var(--line); border-radius:8px; }
+  input[type=range] { flex:1; }
+  .grow { flex:1; }
+  button { padding:14px; font-size:17px; font-weight:600; border:none; border-radius:10px; color:#fff; background:var(--accent); flex:1; }
+  button.ghost { background:#21262d; border:1px solid var(--line); }
+  button:disabled { opacity:.4; }
+  .pill { font-size:12px; color:var(--muted); }
+  #toast { position:fixed; left:50%; bottom:90px; transform:translateX(-50%); background:#1f6feb; color:#fff; padding:10px 16px; border-radius:20px; font-size:14px; opacity:0; transition:opacity .25s; pointer-events:none; max-width:90%; text-align:center; }
+  #toast.show { opacity:1; }
+  #toast.err { background:var(--warn); }
+  #fileFallback { display:none; }
+  .hint { font-size:12px; color:var(--muted); }
+</style>
+</head>
+<body>
+<header>
+  <span>🧩 拼圖單片採集</span>
+  <span class="sub" id="cfgInfo">載入設定中…</span>
+</header>
+
+<div id="stage">
+  <video id="video" autoplay playsinline muted></video>
+  <canvas id="frozen"></canvas>
+  <div id="guide"></div>
+  <div id="cropLayer">
+    <div id="cropBox">
+      <div class="handle tl" data-h="tl"></div>
+      <div class="handle tr" data-h="tr"></div>
+      <div class="handle bl" data-h="bl"></div>
+      <div class="handle br" data-h="br"></div>
+    </div>
+  </div>
+</div>
+
+<div class="controls">
+  <!-- 預覽狀態 -->
+  <div id="liveControls">
+    <div class="row">
+      <label>定位框</label>
+      <input type="range" id="guideSize" min="20" max="90" value="55">
+      <span class="pill" id="guideSizePct">55%</span>
+    </div>
+    <div class="row">
+      <button id="captureBtn">📸 拍照</button>
+    </div>
+    <input type="file" id="fileFallback" accept="image/*" capture="environment">
+    <div class="hint" id="camHint"></div>
+  </div>
+
+  <!-- 編輯狀態 -->
+  <div id="editControls" style="display:none;">
+    <div class="row">
+      <label>列 row</label>
+      <input type="number" id="rowInput" min="1" step="1" inputmode="numeric">
+      <label>行 col</label>
+      <input type="number" id="colInput" min="1" step="1" inputmode="numeric">
+      <span class="pill" id="cellInfo"></span>
+    </div>
+    <div class="row">
+      <button class="ghost" id="retakeBtn">↩︎ 重拍</button>
+      <button id="saveBtn">💾 儲存</button>
+    </div>
+  </div>
+</div>
+
+<div id="toast"></div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const video = $("video"), frozen = $("frozen"), guide = $("guide"), stage = $("stage");
+const cropLayer = $("cropLayer"), cropBox = $("cropBox");
+let cfg = { rows: 40, cols: 25 };
+let captures = [];          // [{col,row,count}]
+let frozenW = 0, frozenH = 0;   // 凍結影像原始像素尺寸
+let imgRect = null;         // 凍結影像在畫面上的顯示矩形 {x,y,w,h}
+
+// ---------- 設定 / 已採集統計 ----------
+async function loadConfig() {
+  try {
+    cfg = await (await fetch("/api/config")).json();
+  } catch (e) {}
+  $("cfgInfo").textContent = `${cfg.rows} 列 × ${cfg.cols} 行 = ${cfg.total_pieces ?? cfg.rows*cfg.cols} 片`;
+  $("rowInput").max = cfg.rows;
+  $("colInput").max = cfg.cols;
+}
+async function loadCaptures() {
+  try { captures = (await (await fetch("/api/captures")).json()).cells || []; } catch (e) {}
+}
+function cellCount(col, row) {
+  const c = captures.find((x) => x.col === col && x.row === row);
+  return c ? c.count : 0;
+}
+
+// ---------- 定位框（即時預覽）----------
+function updateGuide() {
+  const pct = +$("guideSize").value;
+  $("guideSizePct").textContent = pct + "%";
+  localStorage.setItem("guidePct", pct);
+  const r = video.getBoundingClientRect(), sr = stage.getBoundingClientRect();
+  if (r.width === 0) return;
+  const side = Math.min(r.width, r.height) * pct / 100;
+  guide.style.display = "block";
+  guide.style.width = guide.style.height = side + "px";
+  guide.style.left = (r.left - sr.left + (r.width - side) / 2) + "px";
+  guide.style.top = (r.top - sr.top + (r.height - side) / 2) + "px";
+}
+
+// ---------- 開鏡頭 ----------
+async function startCamera() {
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: { ideal: "environment" } }, audio: false,
+    });
+    video.srcObject = stream;
+    await video.play();
+    video.addEventListener("loadedmetadata", updateGuide);
+    setTimeout(updateGuide, 300);
+    $("camHint").textContent = "把拼圖單片對齊虛線框，盡量填滿。";
+  } catch (e) {
+    // 退回原生相機（免 HTTPS）：無即時定位框
+    video.style.display = "none";
+    guide.style.display = "none";
+    $("captureBtn").style.display = "none";
+    $("guideSize").parentElement.style.display = "none";
+    $("fileFallback").style.display = "block";
+    $("camHint").textContent = "無法開啟即時鏡頭（需 HTTPS 或權限）。改用相機拍照後上傳，拍完仍可手動裁切。";
+  }
+}
+
+// ---------- 凍結影像 ----------
+function freezeFromVideo() {
+  frozenW = video.videoWidth; frozenH = video.videoHeight;
+  frozen.width = frozenW; frozen.height = frozenH;
+  frozen.getContext("2d").drawImage(video, 0, 0, frozenW, frozenH);
+  enterEdit();
+}
+function freezeFromFile(file) {
+  const img = new Image();
+  img.onload = () => {
+    frozenW = img.naturalWidth; frozenH = img.naturalHeight;
+    frozen.width = frozenW; frozen.height = frozenH;
+    frozen.getContext("2d").drawImage(img, 0, 0);
+    enterEdit();
+    URL.revokeObjectURL(img.src);
+  };
+  img.src = URL.createObjectURL(file);
+}
+
+// 凍結影像 contain 在 stage 內的顯示矩形
+function computeImgRect() {
+  const sr = stage.getBoundingClientRect();
+  const scale = Math.min(sr.width / frozenW, sr.height / frozenH);
+  const w = frozenW * scale, h = frozenH * scale;
+  imgRect = { x: (sr.width - w) / 2, y: (sr.height - h) / 2, w, h, scale };
+}
+
+function enterEdit() {
+  if (video.srcObject) video.srcObject.getTracks().forEach((t) => t.stop());
+  video.style.display = "none"; guide.style.display = "none";
+  frozen.style.display = "block"; cropLayer.style.display = "block";
+  $("liveControls").style.display = "none"; $("editControls").style.display = "block";
+  computeImgRect();
+  // 預設裁切框 = 中央（套用上次定位框比例）
+  const pct = +(localStorage.getItem("guidePct") || 55) / 100;
+  const side = Math.min(imgRect.w, imgRect.h) * pct;
+  setCrop(imgRect.x + (imgRect.w - side) / 2, imgRect.y + (imgRect.h - side) / 2, side, side);
+  refreshCellInfo();
+}
+
+// ---------- 裁切框拖拉 / 縮放 ----------
+let crop = { x: 0, y: 0, w: 0, h: 0 };
+function setCrop(x, y, w, h) {
+  const min = 30;
+  w = Math.max(min, w); h = Math.max(min, h);
+  // 夾限在影像顯示範圍內
+  x = Math.max(imgRect.x, Math.min(x, imgRect.x + imgRect.w - w));
+  y = Math.max(imgRect.y, Math.min(y, imgRect.y + imgRect.h - h));
+  w = Math.min(w, imgRect.x + imgRect.w - x);
+  h = Math.min(h, imgRect.y + imgRect.h - y);
+  crop = { x, y, w, h };
+  cropBox.style.left = x + "px"; cropBox.style.top = y + "px";
+  cropBox.style.width = w + "px"; cropBox.style.height = h + "px";
+}
+
+let drag = null;
+function pointerXY(e) {
+  const sr = stage.getBoundingClientRect();
+  return { x: e.clientX - sr.left, y: e.clientY - sr.top };
+}
+cropLayer.addEventListener("pointerdown", (e) => {
+  const p = pointerXY(e);
+  const h = e.target.dataset && e.target.dataset.h;
+  if (h) drag = { mode: "resize", corner: h, start: p, orig: { ...crop } };
+  else if (e.clientX >= cropBox.getBoundingClientRect().left && e.clientX <= cropBox.getBoundingClientRect().right &&
+           e.clientY >= cropBox.getBoundingClientRect().top && e.clientY <= cropBox.getBoundingClientRect().bottom)
+    drag = { mode: "move", start: p, orig: { ...crop } };
+  if (drag) { cropLayer.setPointerCapture(e.pointerId); e.preventDefault(); }
+});
+cropLayer.addEventListener("pointermove", (e) => {
+  if (!drag) return;
+  const p = pointerXY(e), dx = p.x - drag.start.x, dy = p.y - drag.start.y, o = drag.orig;
+  if (drag.mode === "move") setCrop(o.x + dx, o.y + dy, o.w, o.h);
+  else {
+    let { x, y, w, h } = o;
+    if (drag.corner.includes("l")) { x = o.x + dx; w = o.w - dx; }
+    if (drag.corner.includes("r")) { w = o.w + dx; }
+    if (drag.corner.includes("t")) { y = o.y + dy; h = o.h - dy; }
+    if (drag.corner.includes("b")) { h = o.h + dy; }
+    setCrop(x, y, w, h);
+  }
+  e.preventDefault();
+});
+const endDrag = () => { drag = null; };
+cropLayer.addEventListener("pointerup", endDrag);
+cropLayer.addEventListener("pointercancel", endDrag);
+
+// ---------- 行列資訊 ----------
+function refreshCellInfo() {
+  const col = +$("colInput").value, row = +$("rowInput").value;
+  if (col && row) $("cellInfo").textContent = `此格已有 ${cellCount(col, row)} 張`;
+  else $("cellInfo").textContent = "";
+}
+$("colInput").addEventListener("input", refreshCellInfo);
+$("rowInput").addEventListener("input", refreshCellInfo);
+
+// ---------- 儲存 ----------
+function toast(msg, isErr) {
+  const t = $("toast"); t.textContent = msg; t.className = "show" + (isErr ? " err" : "");
+  setTimeout(() => (t.className = ""), 2600);
+}
+async function save() {
+  const col = +$("colInput").value, row = +$("rowInput").value;
+  if (!(col >= 1 && col <= cfg.cols)) return toast(`行 col 須介於 1~${cfg.cols}`, true);
+  if (!(row >= 1 && row <= cfg.rows)) return toast(`列 row 須介於 1~${cfg.rows}`, true);
+
+  // 顯示座標 → 原始影像像素座標
+  const sx = (crop.x - imgRect.x) / imgRect.scale, sy = (crop.y - imgRect.y) / imgRect.scale;
+  const sw = crop.w / imgRect.scale, sh = crop.h / imgRect.scale;
+  const out = document.createElement("canvas");
+  out.width = Math.round(sw); out.height = Math.round(sh);
+  out.getContext("2d").drawImage(frozen, sx, sy, sw, sh, 0, 0, out.width, out.height);
+
+  const blob = await new Promise((r) => out.toBlob(r, "image/jpeg", 0.92));
+  const fd = new FormData();
+  fd.append("image", blob, "piece.jpg");
+  fd.append("col", col); fd.append("row", row);
+  $("saveBtn").disabled = true;
+  try {
+    const res = await fetch("/api/captures", { method: "POST", body: fd });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || "儲存失敗");
+    toast(`已存 ${data.filename}（此格第 ${data.total_in_cell} 張）`);
+    await loadCaptures();
+    retake();
+  } catch (e) {
+    toast(e.message, true);
+  } finally {
+    $("saveBtn").disabled = false;
+  }
+}
+
+function retake() {
+  frozen.style.display = "none"; cropLayer.style.display = "none";
+  $("editControls").style.display = "none"; $("liveControls").style.display = "block";
+  if ($("fileFallback").style.display === "block") { video.style.display = "none"; }
+  else { video.style.display = "block"; startCamera(); }
+}
+
+// ---------- 綁定 ----------
+$("guideSize").addEventListener("input", updateGuide);
+$("captureBtn").addEventListener("click", freezeFromVideo);
+$("retakeBtn").addEventListener("click", retake);
+$("saveBtn").addEventListener("click", save);
+$("fileFallback").addEventListener("change", (e) => { if (e.target.files[0]) freezeFromFile(e.target.files[0]); });
+window.addEventListener("resize", () => { if (guide.style.display === "block") updateGuide(); });
+
+(async function init() {
+  $("guideSize").value = localStorage.getItem("guidePct") || 55;
+  await loadConfig();
+  await loadCaptures();
+  await startCamera();
+})();
+</script>
+</body>
+</html>
