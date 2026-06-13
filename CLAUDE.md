@@ -12,6 +12,7 @@
 - **執行定位自動化測試**：`python3 -m pytest tests/test_localization.py -v`
 - **執行定位 CLI 原型**：`python scripts/locate_piece.py <reference.jpg> <piece_photo.jpg>`
 - **啟動 FastAPI 本地開發伺服器**：`uvicorn source.app:app --reload` (暫未擴展)
+- **啟動單片採集 Web App**：`python scripts/run_capture_server.py`（手機 https）或 `--no-tls`（桌機 localhost）。用來拍單片、手動裁切、輸入行列，存成 `data/pieces_c{col}_r{row}.jpg` 測試資料。
 
 ## Code Conventions & Automation
 
