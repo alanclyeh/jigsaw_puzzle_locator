@@ -159,6 +159,9 @@ def test_suggested_rotation_consistency():
 # ---------------------------------------------------------------------------
 # 真實照片整合驗證：data/eval_native/pieces_c<col>_r<row>.jpg 檔名即 ground truth
 # （單片照已統一為原解析度方形裁切，集中於 eval_native/）
+# 註：KNOWN_HARD 列的已知無解片已移至 data/eval_native 以外的 data/eval_hard/
+#     （保留為參考資料，不納入此 gated glob）；故本測試實際只跑「應命中」集。
+#     KNOWN_HARD dict 仍保留作為無解原因的文件記錄與日後回測之用。
 # ---------------------------------------------------------------------------
 
 def _load_grid_config() -> tuple:
