@@ -48,6 +48,7 @@ def ensure_cert() -> tuple[Path, Path]:
     CERT_DIR.mkdir(exist_ok=True)
     try:
         import datetime
+        import ipaddress
 
         from cryptography import x509
         from cryptography.hazmat.primitives import hashes, serialization
@@ -73,7 +74,7 @@ def ensure_cert() -> tuple[Path, Path]:
         .not_valid_after(now + datetime.timedelta(days=825))
         .add_extension(
             x509.SubjectAlternativeName(
-                [x509.DNSName("localhost"), x509.IPAddress(__import__("ipaddress").ip_address(ip))]
+                [x509.DNSName("localhost"), x509.IPAddress(ipaddress.ip_address(ip))]
             ),
             critical=False,
         )

@@ -111,6 +111,8 @@ function cellCount(col, row) {
 }
 
 // ---------- 定位框（即時預覽，固定大小、可拖曳位置以避開反光/陰影）----------
+// 注意：必須維持 GUIDE_RATIO < FRAME_RATIO，且 zoom 最小值=1，
+// 才能保證「定位框框住的區域」初始化時完整落入固定取景框、不被 clampPan 夾限變形。
 const GUIDE_RATIO = 0.62;               // 固定框佔畫面短邊比例
 let guidePos = { fx: 0.5, fy: 0.5 };    // 框在可移動範圍中的比例位置（0~1）
 try { guidePos = JSON.parse(localStorage.getItem("guideCenter")) || guidePos; } catch (e) {}
@@ -157,7 +159,6 @@ async function startCamera() {
     });
     video.srcObject = stream;
     await video.play();
-    video.addEventListener("loadedmetadata", updateGuide);
     setTimeout(updateGuide, 300);
     $("camHint").textContent = "拖曳虛線框可避開反光/陰影；對準單片後按拍照。";
   } catch (e) {
@@ -350,6 +351,7 @@ function retake() {
 }
 
 // ---------- 綁定 ----------
+video.addEventListener("loadedmetadata", updateGuide);   // 註冊一次，避免每次重拍累積監聽器
 $("captureBtn").addEventListener("click", freezeFromVideo);
 $("retakeBtn").addEventListener("click", retake);
 $("saveBtn").addEventListener("click", save);
