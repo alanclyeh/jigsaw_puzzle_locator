@@ -31,6 +31,28 @@
   #toast.show { opacity:1; }
   #toast.err { background:var(--warn); }
   .hint { font-size:12px; color:var(--muted); }
+  /* 拍攝指示卡 */
+  #howto { background:var(--bg); border:1px solid var(--line); border-radius:10px; padding:14px; }
+  #howto h2 { margin:0 0 12px; font-size:15px; font-weight:600; display:flex; align-items:center; gap:6px; }
+  .howto-eg { display:flex; gap:12px; margin-bottom:14px; }
+  .howto-eg figure { flex:1; margin:0; text-align:center; }
+  .eg-frame { position:relative; aspect-ratio:3/4; border:2px solid var(--line); border-radius:8px; display:flex; align-items:center; justify-content:center; }
+  .eg-frame.good { border-color:var(--ok); }
+  .eg-frame.bad { border-color:var(--warn); }
+  .eg-piece { background:#6b7785; border-radius:4px; }
+  .eg-frame.good .eg-piece { width:48%; height:48%; }
+  .eg-frame.bad .eg-piece { width:96%; height:96%; }
+  .eg-tag { position:absolute; bottom:4px; left:0; right:0; font-size:11px; color:var(--muted); }
+  .howto-eg figcaption { margin-top:6px; font-size:12px; font-weight:600; }
+  figure.ok figcaption { color:var(--ok); }
+  figure.no figcaption { color:var(--warn); }
+  #howto ul { list-style:none; margin:0; padding:0; }
+  #howto li { display:flex; gap:8px; padding:9px 0; font-size:14px; line-height:1.5; border-top:1px solid var(--line); }
+  #howto li b { color:var(--ok); font-weight:600; }
+  #howto .ic { flex:0 0 20px; text-align:center; }
+  #howto .gotit { margin-top:12px; }
+  .howto-link { font-size:13px; color:var(--accent); background:none; border:none; padding:6px 0; text-align:left; flex:initial; font-weight:600; }
+  #howto .note { margin:10px 0 0; padding-top:9px; border-top:1px solid var(--line); font-size:13px; color:var(--warn); line-height:1.6; }
 </style>
 </head>
 <body>
@@ -54,7 +76,31 @@
       <label class="btn" for="fileInput">📷 拍照（開啟相機）</label>
       <input type="file" id="fileInput" accept="image/*" capture="environment" style="display:none">
     </div>
-    <div class="hint">點上方開啟相機拍單片（建議單片填滿畫面、光線均勻、背景單純）。拍完回到此頁裁切。</div>
+    <div id="howto">
+      <h2>📸 拍單片前，先看這裡</h2>
+      <div class="howto-eg">
+        <figure class="ok">
+          <div class="eg-frame good"><div class="eg-piece"></div><span class="eg-tag">約佔一半</span></div>
+          <figcaption>✓ 好</figcaption>
+        </figure>
+        <figure class="no">
+          <div class="eg-frame bad"><div class="eg-piece"></div><span class="eg-tag">太近 → 糊</span></div>
+          <figcaption>✕ 不要塞滿</figcaption>
+        </figure>
+      </div>
+      <ul>
+        <li><span class="ic">📏</span><span>手機離單片約一個手掌高，<b>單片佔半個畫面</b>就好，不用塞滿。</span></li>
+        <li><span class="ic">🎯</span><span>點一下螢幕上的單片對焦，<b>畫面清楚</b>再拍；糊掉就退遠一點。</span></li>
+        <li><span class="ic">💡</span><span><b>關閃光燈</b>，光從側面來，表面別有反光亮點。</span></li>
+        <li><span class="ic">🟩</span><span>放在<b>乾淨單色墊</b>上，整片平放、置中、一次一片。</span></li>
+      </ul>
+      <p class="note">⚠️ 純色片（天空、邊角、單一色塊）本身沒花紋，怎麼拍都難辨識，可先跳過、優先拍有圖案的片。</p>
+      <button class="gotit" id="gotitBtn">知道了，開始拍</button>
+    </div>
+    <div class="row">
+      <button class="howto-link" id="howtoLink" style="display:none">？拍攝說明</button>
+    </div>
+    <div class="hint">拍完回到此頁，在綠框內裁切（原解析度）。</div>
   </div>
 
   <!-- 編輯：固定框 + 移動/縮放底圖，原解析度裁切 -->
@@ -261,6 +307,19 @@ $("fileInput").addEventListener("change", (e) => { if (e.target.files[0]) loadPh
 $("retakeBtn").addEventListener("click", () => { backToStart(); $("fileInput").click(); });
 $("saveBtn").addEventListener("click", save);
 window.addEventListener("resize", () => { if (cropLayer.style.display === "block") reflow(false); });
+
+// ---------- 拍攝指示卡：首次展開，看過後收合成連結 ----------
+function showHowto(show) {
+  $("howto").style.display = show ? "block" : "none";
+  $("howtoLink").style.display = show ? "none" : "block";
+}
+$("gotitBtn").addEventListener("click", () => {
+  try { localStorage.setItem("howtoSeen", "1"); } catch (e) {}
+  showHowto(false);
+  $("fileInput").click();   // 順手開相機
+});
+$("howtoLink").addEventListener("click", () => showHowto(true));
+try { showHowto(localStorage.getItem("howtoSeen") !== "1"); } catch (e) { showHowto(true); }
 
 (async function init() {
   await loadConfig();
