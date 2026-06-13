@@ -15,6 +15,9 @@ log/*
 output/*
 !output/.gitkeep
 
+# Dev TLS certs (capture web app)
+.certs/
+
 # IDEs
 .vscode/
 .idea/
