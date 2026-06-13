@@ -171,11 +171,22 @@ async function startCamera() {
 }
 
 // ---------- 凍結影像 ----------
+// 把即時定位框換算成凍結影像的像素區域 → 截圖即對應此框的位置
+function guideRegionInImagePixels() {
+  const rv = video.getBoundingClientRect(), gb = guide.getBoundingClientRect();
+  if (!rv.width || !gb.width) return null;
+  const scale = frozenW / rv.width;   // 影像像素 / CSS px（video 元素無內部留白，等比例）
+  const x = Math.max(0, (gb.left - rv.left) * scale);
+  const y = Math.max(0, (gb.top - rv.top) * scale);
+  const side = Math.min(gb.width * scale, frozenW - x, frozenH - y);
+  return { x, y, side };
+}
+
 function freezeFromVideo() {
   frozenW = video.videoWidth; frozenH = video.videoHeight;
   frozen.width = frozenW; frozen.height = frozenH;
   frozen.getContext("2d").drawImage(video, 0, 0, frozenW, frozenH);
-  enterEdit();
+  enterEdit(guideRegionInImagePixels());
 }
 function freezeFromFile(file) {
   const img = new Image();
@@ -183,7 +194,7 @@ function freezeFromFile(file) {
     frozenW = img.naturalWidth; frozenH = img.naturalHeight;
     frozen.width = frozenW; frozen.height = frozenH;
     frozen.getContext("2d").drawImage(img, 0, 0);
-    enterEdit();
+    enterEdit(null);   // 檔案上傳無即時定位框，預設置中
     URL.revokeObjectURL(img.src);
   };
   img.src = URL.createObjectURL(file);
@@ -229,13 +240,26 @@ function reflow(recenter) {
   applyTransform();
 }
 
-function enterEdit() {
+function enterEdit(region) {
   if (video.srcObject) video.srcObject.getTracks().forEach((t) => t.stop());
   video.style.display = "none"; guide.style.display = "none";
   frozen.style.display = "block"; cropLayer.style.display = "block";
   $("liveControls").style.display = "none"; $("editControls").style.display = "block";
-  zoom.value = 1;
-  reflow(true);
+  computeFrame();
+  tf.baseS = Math.max(frame.size / frozenW, frame.size / frozenH); // zoom=1 時剛好覆蓋固定框
+  if (region && region.side > 0) {
+    // 初始裁切對應拍攝時的定位框：把框住的影像區域置中填入固定取景框
+    const z = Math.min(+zoom.max, Math.max(+zoom.min, (frame.size / region.side) / tf.baseS));
+    zoom.value = z;
+    tf.s = tf.baseS * z;
+    const cx = region.x + region.side / 2, cy = region.y + region.side / 2;
+    tf.tx = frame.x + frame.size / 2 - cx * tf.s;
+    tf.ty = frame.y + frame.size / 2 - cy * tf.s;
+    applyTransform();
+  } else {
+    zoom.value = 1;
+    reflow(true);   // 無定位框資訊時置中
+  }
   refreshCellInfo();
 }
 
