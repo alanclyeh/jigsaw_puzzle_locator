@@ -14,11 +14,15 @@ def pytest_terminal_summary(terminalreporter, exitstatus, config):
     passed_list = stats.get('passed', [])
     failed_list = stats.get('failed', [])
     skipped_list = stats.get('skipped', [])
-    
+    xfailed_list = stats.get('xfailed', [])
+    xpassed_list = stats.get('xpassed', [])
+
     total_passed = len(passed_list)
     total_failed = len(failed_list)
     total_skipped = len(skipped_list)
-    total_tests = total_passed + total_failed + total_skipped
+    total_xfailed = len(xfailed_list)
+    total_xpassed = len(xpassed_list)
+    total_tests = total_passed + total_failed + total_skipped + total_xfailed + total_xpassed
     
     duration = time.time() - START_TIME
     
@@ -52,7 +56,28 @@ def pytest_terminal_summary(terminalreporter, exitstatus, config):
             <span class="test-duration">N/A</span>
         </div>
         """)
-        
+
+    # XFAIL：已知無解 (預期失敗) 的測項，附上標註原因，誠實呈現於報告中
+    for rep in xfailed_list:
+        reason = getattr(rep, "wasxfail", "") or ""
+        reason = str(reason).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        test_details.append(f"""
+        <div class="test-item skipped">
+            <span class="status-badge skipped">XFAIL</span>
+            <span class="test-name">{rep.nodeid}</span>
+            <span class="test-duration">{reason}</span>
+        </div>
+        """)
+
+    for rep in xpassed_list:
+        test_details.append(f"""
+        <div class="test-item passed">
+            <span class="status-badge passed">XPASS</span>
+            <span class="test-name">{rep.nodeid}</span>
+            <span class="test-duration">unexpectedly passed</span>
+        </div>
+        """)
+
     test_details_html = "\n".join(test_details)
     
     status_text = "PASSED" if total_failed == 0 else "FAILED"
@@ -488,6 +513,10 @@ def pytest_terminal_summary(terminalreporter, exitstatus, config):
                         <div class="stat-lbl">Failed</div>
                     </div>
                     <div class="stat-item">
+                        <div class="stat-val" style="color: var(--text-secondary);">__TOTAL_XFAILED__</div>
+                        <div class="stat-lbl">XFail (known-hard)</div>
+                    </div>
+                    <div class="stat-item">
                         <div class="stat-val">__DURATION__s</div>
                         <div class="stat-lbl">Duration</div>
                     </div>
@@ -604,6 +633,7 @@ graph TD
                                  .replace("__TOTAL_TESTS__", str(total_tests)) \
                                  .replace("__TOTAL_PASSED__", str(total_passed)) \
                                  .replace("__TOTAL_FAILED__", str(total_failed)) \
+                                 .replace("__TOTAL_XFAILED__", str(total_xfailed + total_xpassed)) \
                                  .replace("__DURATION__", f"{duration:.4f}") \
                                  .replace("__TEST_DETAILS_HTML__", test_details_html)
     
