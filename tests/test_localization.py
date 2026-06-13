@@ -178,7 +178,7 @@ def _load_grid_config() -> tuple:
 # strict=False：若日後演算法改進使某片轉為命中，pytest 標記 XPASS 而不讓套件失敗。
 KNOWN_HARD = {
     "pieces_c10_r40": "A 低紋理區，GT ZNCC 排名 79/1000",
-    "pieces_c17_r17": "A 低紋理區，GT 排名 17 (3 尺度)；僅單尺度高解析度可命中，現行多尺度無法",
+    "pieces_c17_r17": "A 低紋理區，GT 排名 17 (3 尺度)；單尺度高解析度可命中但會回歸 c2_r32，故不採用",
     "pieces_c1_r1":   "A 左上角落低紋理，GT 排名 337/1000",
     "pieces_c1_r39":  "A 左下邊緣低紋理，GT 排名 50/1000",
     "pieces_c1_r40":  "A 左下角落低紋理，GT 排名 325/1000",
