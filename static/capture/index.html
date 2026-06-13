@@ -14,8 +14,8 @@
   #stage { position:relative; flex:1; min-height:0; background:#000; overflow:hidden; display:flex; align-items:center; justify-content:center; }
   #video { max-width:100%; max-height:100%; display:block; }
   #frozen { display:none; position:absolute; left:0; top:0; transform-origin:0 0; will-change:transform; }
-  /* 即時定位框 */
-  #guide { position:absolute; border:2px dashed var(--accent); box-shadow:0 0 0 9999px rgba(0,0,0,.35); pointer-events:none; display:none; }
+  /* 即時定位框：固定大小、可拖曳移動位置（避開反光/陰影）*/
+  #guide { position:absolute; border:2px dashed var(--accent); box-shadow:0 0 0 9999px rgba(0,0,0,.35); display:none; touch-action:none; cursor:move; }
   /* 編輯狀態：固定大小裁切框（不可調），底圖可移動/縮放去對齊 */
   #cropLayer { position:absolute; inset:0; display:none; touch-action:none; cursor:grab; }
   #cropLayer:active { cursor:grabbing; }
@@ -55,11 +55,6 @@
 <div class="controls">
   <!-- 預覽狀態 -->
   <div id="liveControls">
-    <div class="row">
-      <label>定位框</label>
-      <input type="range" id="guideSize" min="20" max="90" value="55">
-      <span class="pill" id="guideSizePct">55%</span>
-    </div>
     <div class="row">
       <button id="captureBtn">📸 拍照</button>
     </div>
@@ -115,19 +110,44 @@ function cellCount(col, row) {
   return c ? c.count : 0;
 }
 
-// ---------- 定位框（即時預覽）----------
+// ---------- 定位框（即時預覽，固定大小、可拖曳位置以避開反光/陰影）----------
+const GUIDE_RATIO = 0.62;               // 固定框佔畫面短邊比例
+let guidePos = { fx: 0.5, fy: 0.5 };    // 框在可移動範圍中的比例位置（0~1）
+try { guidePos = JSON.parse(localStorage.getItem("guideCenter")) || guidePos; } catch (e) {}
+
 function updateGuide() {
-  const pct = +$("guideSize").value;
-  $("guideSizePct").textContent = pct + "%";
-  localStorage.setItem("guidePct", pct);
   const r = video.getBoundingClientRect(), sr = stage.getBoundingClientRect();
   if (r.width === 0) return;
-  const side = Math.min(r.width, r.height) * pct / 100;
+  const side = Math.min(r.width, r.height) * GUIDE_RATIO;
+  const freeW = Math.max(0, r.width - side), freeH = Math.max(0, r.height - side);
   guide.style.display = "block";
   guide.style.width = guide.style.height = side + "px";
-  guide.style.left = (r.left - sr.left + (r.width - side) / 2) + "px";
-  guide.style.top = (r.top - sr.top + (r.height - side) / 2) + "px";
+  guide.style.left = (r.left - sr.left + freeW * guidePos.fx) + "px";
+  guide.style.top = (r.top - sr.top + freeH * guidePos.fy) + "px";
 }
+
+// 拖曳移動定位框（位置記憶於 localStorage）
+let gDrag = null;
+guide.addEventListener("pointerdown", (e) => {
+  gDrag = { start: pointerXY(e), pos: { ...guidePos } };
+  guide.setPointerCapture(e.pointerId); e.preventDefault();
+});
+guide.addEventListener("pointermove", (e) => {
+  if (!gDrag) return;
+  const r = video.getBoundingClientRect();
+  const side = Math.min(r.width, r.height) * GUIDE_RATIO;
+  const freeW = Math.max(1, r.width - side), freeH = Math.max(1, r.height - side);
+  const p = pointerXY(e);
+  guidePos.fx = Math.min(1, Math.max(0, gDrag.pos.fx + (p.x - gDrag.start.x) / freeW));
+  guidePos.fy = Math.min(1, Math.max(0, gDrag.pos.fy + (p.y - gDrag.start.y) / freeH));
+  updateGuide(); e.preventDefault();
+});
+function endGuideDrag() {
+  if (gDrag) localStorage.setItem("guideCenter", JSON.stringify(guidePos));
+  gDrag = null;
+}
+guide.addEventListener("pointerup", endGuideDrag);
+guide.addEventListener("pointercancel", endGuideDrag);
 
 // ---------- 開鏡頭 ----------
 async function startCamera() {
@@ -139,13 +159,12 @@ async function startCamera() {
     await video.play();
     video.addEventListener("loadedmetadata", updateGuide);
     setTimeout(updateGuide, 300);
-    $("camHint").textContent = "把拼圖單片對齊虛線框，盡量填滿。";
+    $("camHint").textContent = "拖曳虛線框可避開反光/陰影；對準單片後按拍照。";
   } catch (e) {
     // 退回原生相機（免 HTTPS）：無即時定位框
     video.style.display = "none";
     guide.style.display = "none";
     $("captureBtn").style.display = "none";
-    $("guideSize").parentElement.style.display = "none";
     $("fileFallback").style.display = "block";
     $("camHint").textContent = "無法開啟即時鏡頭（需 HTTPS 或權限）。改用相機拍照後上傳，拍完仍可手動裁切。";
   }
@@ -307,7 +326,6 @@ function retake() {
 }
 
 // ---------- 綁定 ----------
-$("guideSize").addEventListener("input", updateGuide);
 $("captureBtn").addEventListener("click", freezeFromVideo);
 $("retakeBtn").addEventListener("click", retake);
 $("saveBtn").addEventListener("click", save);
@@ -318,7 +336,6 @@ window.addEventListener("resize", () => {
 });
 
 (async function init() {
-  $("guideSize").value = localStorage.getItem("guidePct") || 55;
   await loadConfig();
   await loadCaptures();
   await startCamera();
