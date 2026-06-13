@@ -203,7 +203,8 @@ function freezeFromFile(file) {
 
 // ---------- 固定框 + 移動/縮放底圖 ----------
 const FRAME_RATIO = 0.72;    // 固定框佔畫面短邊比例（僅顯示用）
-const OUTPUT_SIZE = 512;     // 固定輸出邊長(px) → 所有截圖尺寸一致；夠用即可、越小比對越快
+// 不再固定輸出尺寸：截圖以原解析度裁切（不縮放），尺寸 = 框對應的原始像素邊長，
+// 隨縮放倍率而變（zoom=1 時約等於相機短邊解析度，為最高可得解析度）。
 let frame = { x: 0, y: 0, size: 0 };       // 固定框在 stage 的矩形
 let tf = { baseS: 1, s: 1, tx: 0, ty: 0 }; // 影像變換：stage 座標 = (tx,ty) + img_px * s
 const zoom = $("zoom");
@@ -316,12 +317,13 @@ async function save() {
   if (!(col >= 1 && col <= cfg.cols)) return toast(`行 col 須介於 1~${cfg.cols}`, true);
   if (!(row >= 1 && row <= cfg.rows)) return toast(`列 row 須介於 1~${cfg.rows}`, true);
 
-  // 固定框 → 原始影像像素座標（輸出永遠 OUTPUT_SIZE 正方形，確保每張尺寸一致）
+  // 固定框 → 原始影像像素座標。不縮放、只裁切：輸出維持原解析度（1:1 取像素）
   const sx = (frame.x - tf.tx) / tf.s, sy = (frame.y - tf.ty) / tf.s;
   const sSide = frame.size / tf.s;
+  const side = Math.max(1, Math.round(sSide));
   const out = document.createElement("canvas");
-  out.width = OUTPUT_SIZE; out.height = OUTPUT_SIZE;
-  out.getContext("2d").drawImage(frozen, sx, sy, sSide, sSide, 0, 0, OUTPUT_SIZE, OUTPUT_SIZE);
+  out.width = side; out.height = side;
+  out.getContext("2d").drawImage(frozen, sx, sy, sSide, sSide, 0, 0, side, side);
 
   const blob = await new Promise((r) => out.toBlob(r, "image/jpeg", 0.92));
   const fd = new FormData();
