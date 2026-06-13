@@ -301,6 +301,7 @@ async function save() {
 function retake() {
   frozen.style.display = "none"; cropLayer.style.display = "none";
   $("editControls").style.display = "none"; $("liveControls").style.display = "block";
+  $("fileFallback").value = "";   // 清空才能重新選同一個檔案
   if ($("fileFallback").style.display === "block") { video.style.display = "none"; }
   else { video.style.display = "block"; startCamera(); }
 }

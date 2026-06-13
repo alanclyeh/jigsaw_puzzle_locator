@@ -33,9 +33,15 @@ def local_ip() -> str:
 
 
 def ensure_cert() -> tuple[Path, Path]:
-    """確保自簽憑證存在（重用既有）。回傳 (cert, key)。"""
-    cert_path = CERT_DIR / "dev_cert.pem"
-    key_path = CERT_DIR / "dev_key.pem"
+    """確保自簽憑證存在（重用既有）。回傳 (cert, key)。
+
+    憑證檔名綁定當下 IP；若機器 IP（DHCP）變動會產生新檔並重新簽發，
+    避免重用到 SAN 不符的舊憑證導致手機端 TLS 失敗。
+    """
+    ip = local_ip()
+    suffix = ip.replace(".", "_")
+    cert_path = CERT_DIR / f"dev_cert_{suffix}.pem"
+    key_path = CERT_DIR / f"dev_key_{suffix}.pem"
     if cert_path.exists() and key_path.exists():
         return cert_path, key_path
 
@@ -56,7 +62,6 @@ def ensure_cert() -> tuple[Path, Path]:
 
     key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
     name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "jp-locator-dev")])
-    ip = local_ip()
     now = datetime.datetime.now(datetime.timezone.utc)
     cert = (
         x509.CertificateBuilder()
