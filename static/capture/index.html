@@ -202,7 +202,7 @@ function freezeFromFile(file) {
 
 // ---------- 固定框 + 移動/縮放底圖 ----------
 const FRAME_RATIO = 0.72;    // 固定框佔畫面短邊比例（僅顯示用）
-const OUTPUT_SIZE = 720;     // 固定輸出邊長(px) → 所有截圖尺寸一致
+const OUTPUT_SIZE = 200;     // 固定輸出邊長(px) → 所有截圖尺寸一致；夠用即可、越小比對越快
 let frame = { x: 0, y: 0, size: 0 };       // 固定框在 stage 的矩形
 let tf = { baseS: 1, s: 1, tx: 0, ty: 0 }; // 影像變換：stage 座標 = (tx,ty) + img_px * s
 const zoom = $("zoom");
