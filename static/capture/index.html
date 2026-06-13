@@ -115,6 +115,7 @@ function loadPhoto(file) {
     enterEdit();
     URL.revokeObjectURL(img.src);
   };
+  img.onerror = () => { URL.revokeObjectURL(img.src); toast("無法讀取此影像，請重拍", true); };
   img.src = URL.createObjectURL(file);
 }
 
@@ -229,6 +230,7 @@ async function save() {
   out.getContext("2d").drawImage(frozen, sx, sy, sSide, sSide, 0, 0, side, side);
 
   const blob = await new Promise((r) => out.toBlob(r, "image/jpeg", 0.92));
+  if (!blob) return toast("產生影像失敗，請重拍", true);
   const fd = new FormData();
   fd.append("image", blob, "piece.jpg");
   fd.append("col", col); fd.append("row", row);
