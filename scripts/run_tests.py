@@ -129,11 +129,17 @@ def main():
     ref_h, ref_w = ref_img.shape[:2]
     
     # 找出所有符合 pieces_c*_r*.jpg 等命名格式的碎片
+    # 單片資料現分流於 eval_native/（應命中集）與 eval_hard/（已知無解片）；
+    # 仍掃 data 根以相容舊放法。
     piece_files = []
-    for ext in ["*.jpg", "*.jpeg", "*.png"]:
-        for p_file in data_dir.glob(ext):
-            if p_file.name != "reference_puzzle.jpg" and not p_file.name.endswith("_clean.png") and not p_file.name.endswith("_located.jpg"):
-                piece_files.append(p_file)
+    for sub in ["eval_native", "eval_hard", "."]:
+        d = data_dir / sub
+        if not d.exists():
+            continue
+        for ext in ["*.jpg", "*.jpeg", "*.png"]:
+            for p_file in d.glob(ext):
+                if p_file.name != "reference_puzzle.jpg" and not p_file.name.endswith("_clean.png") and not p_file.name.endswith("_located.jpg"):
+                    piece_files.append(p_file)
                 
     real_results = []
     output_dir = data_dir / "output"

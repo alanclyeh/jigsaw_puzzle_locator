@@ -196,7 +196,7 @@ KNOWN_HARD = {
     "pieces_c21_r6":  "B 去背殘片，主體長寬比 2.54 (應約 1:1)",
     "pieces_c25_r1":  "B 去背殘片，主體長寬比 1.75；右上角落低紋理",
     "pieces_c25_r7":  "B 去背殘片，主體長寬比 6.92 (嚴重殘缺)",
-    # eval_native 高解析度盲測新增無解片（原生相機批，scripts/eval_dataset.py 量測）
+    # 經原生相機高解析度批盲測發現之無解片（scripts/eval_dataset.py 量測）；現存於 data/eval_hard/
     "pieces_c19_r21": "A row 方向歧義：298 與高解析度版皆預測 r11 c19 (col 對、row 飄 10)",
     "pieces_c23_r4":  "A 誤匹配：高解析度版 conf≈1.0 卻定位 r6 c3 (帶遮罩相關假峰值)",
     "pieces_c10_r1":  "A 頂邊低辨識度脆弱片：原非方形版可命中，統一方形裁切後回歸 (預測 r31 c5, conf 0.49)",
