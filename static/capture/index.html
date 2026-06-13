@@ -12,28 +12,24 @@
   header { padding:10px 14px; font-size:16px; font-weight:600; border-bottom:1px solid var(--line); display:flex; justify-content:space-between; align-items:center; }
   header .sub { font-size:12px; color:var(--muted); font-weight:400; }
   #stage { position:relative; flex:1; min-height:0; background:#000; overflow:hidden; display:flex; align-items:center; justify-content:center; }
-  #video { max-width:100%; max-height:100%; display:block; }
   #frozen { display:none; position:absolute; left:0; top:0; transform-origin:0 0; will-change:transform; }
-  /* 即時定位框：固定大小、可拖曳移動位置（避開反光/陰影）*/
-  #guide { position:absolute; border:2px dashed var(--accent); box-shadow:0 0 0 9999px rgba(0,0,0,.35); display:none; touch-action:none; cursor:move; }
   /* 編輯狀態：固定大小裁切框（不可調），底圖可移動/縮放去對齊 */
   #cropLayer { position:absolute; inset:0; display:none; touch-action:none; cursor:grab; }
   #cropLayer:active { cursor:grabbing; }
   #cropBox { position:absolute; border:2px solid var(--ok); box-shadow:0 0 0 9999px rgba(0,0,0,.5); pointer-events:none; }
+  #placeholder { color:var(--muted); font-size:15px; text-align:center; padding:0 30px; line-height:1.7; }
   .controls { padding:10px 14px; border-top:1px solid var(--line); background:var(--panel); display:flex; flex-direction:column; gap:10px; }
   .row { display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
   .row label { font-size:13px; color:var(--muted); min-width:46px; }
   input[type=number] { width:90px; padding:10px; font-size:18px; background:var(--bg); color:var(--text); border:1px solid var(--line); border-radius:8px; }
   input[type=range] { flex:1; }
-  .grow { flex:1; }
-  button { padding:14px; font-size:17px; font-weight:600; border:none; border-radius:10px; color:#fff; background:var(--accent); flex:1; }
-  button.ghost { background:#21262d; border:1px solid var(--line); }
+  button, .btn { padding:14px; font-size:17px; font-weight:600; border:none; border-radius:10px; color:#fff; background:var(--accent); flex:1; text-align:center; display:block; }
+  button.ghost, .btn.ghost { background:#21262d; border:1px solid var(--line); }
   button:disabled { opacity:.4; }
   .pill { font-size:12px; color:var(--muted); }
   #toast { position:fixed; left:50%; bottom:90px; transform:translateX(-50%); background:#1f6feb; color:#fff; padding:10px 16px; border-radius:20px; font-size:14px; opacity:0; transition:opacity .25s; pointer-events:none; max-width:90%; text-align:center; }
   #toast.show { opacity:1; }
   #toast.err { background:var(--warn); }
-  #fileFallback { display:none; }
   .hint { font-size:12px; color:var(--muted); }
 </style>
 </head>
@@ -44,30 +40,29 @@
 </header>
 
 <div id="stage">
-  <video id="video" autoplay playsinline muted></video>
+  <div id="placeholder">用相機拍一張單片<br>拍完可在綠框內裁切（原解析度）</div>
   <canvas id="frozen"></canvas>
-  <div id="guide"></div>
   <div id="cropLayer">
     <div id="cropBox"></div>
   </div>
 </div>
 
 <div class="controls">
-  <!-- 預覽狀態 -->
-  <div id="liveControls">
+  <!-- 起始：用原生相機拍照 -->
+  <div id="startControls">
     <div class="row">
-      <button id="captureBtn">📸 拍照</button>
+      <label class="btn" for="fileInput">📷 拍照（開啟相機）</label>
+      <input type="file" id="fileInput" accept="image/*" capture="environment" style="display:none">
     </div>
-    <input type="file" id="fileFallback" accept="image/*" capture="environment">
-    <div class="hint" id="camHint"></div>
+    <div class="hint">點上方開啟相機拍單片（建議單片填滿畫面、光線均勻、背景單純）。拍完回到此頁裁切。</div>
   </div>
 
-  <!-- 編輯狀態 -->
+  <!-- 編輯：固定框 + 移動/縮放底圖，原解析度裁切 -->
   <div id="editControls" style="display:none;">
     <div class="row">
       <label>縮放</label>
       <input type="range" id="zoom" min="1" max="5" step="0.01" value="1">
-      <span class="pill">拖曳移動、縮放底圖，讓單片填滿固定框</span>
+      <span class="pill">拖曳移動、縮放底圖，讓單片落在綠框內</span>
     </div>
     <div class="row">
       <label>列 row</label>
@@ -87,7 +82,7 @@
 
 <script>
 const $ = (id) => document.getElementById(id);
-const video = $("video"), frozen = $("frozen"), guide = $("guide"), stage = $("stage");
+const frozen = $("frozen"), stage = $("stage");
 const cropLayer = $("cropLayer"), cropBox = $("cropBox");
 let cfg = { rows: 40, cols: 25 };
 let captures = [];          // [{col,row,count}]
@@ -110,101 +105,23 @@ function cellCount(col, row) {
   return c ? c.count : 0;
 }
 
-// ---------- 定位框（即時預覽，固定大小、可拖曳位置以避開反光/陰影）----------
-// 注意：必須維持 GUIDE_RATIO < FRAME_RATIO，且 zoom 最小值=1，
-// 才能保證「定位框框住的區域」初始化時完整落入固定取景框、不被 clampPan 夾限變形。
-const GUIDE_RATIO = 0.62;               // 固定框佔畫面短邊比例
-let guidePos = { fx: 0.5, fy: 0.5 };    // 框在可移動範圍中的比例位置（0~1）
-try { guidePos = JSON.parse(localStorage.getItem("guideCenter")) || guidePos; } catch (e) {}
-
-function updateGuide() {
-  const r = video.getBoundingClientRect(), sr = stage.getBoundingClientRect();
-  if (r.width === 0) return;
-  const side = Math.min(r.width, r.height) * GUIDE_RATIO;
-  const freeW = Math.max(0, r.width - side), freeH = Math.max(0, r.height - side);
-  guide.style.display = "block";
-  guide.style.width = guide.style.height = side + "px";
-  guide.style.left = (r.left - sr.left + freeW * guidePos.fx) + "px";
-  guide.style.top = (r.top - sr.top + freeH * guidePos.fy) + "px";
-}
-
-// 拖曳移動定位框（位置記憶於 localStorage）
-let gDrag = null;
-guide.addEventListener("pointerdown", (e) => {
-  gDrag = { start: pointerXY(e), pos: { ...guidePos } };
-  guide.setPointerCapture(e.pointerId); e.preventDefault();
-});
-guide.addEventListener("pointermove", (e) => {
-  if (!gDrag) return;
-  const r = video.getBoundingClientRect();
-  const side = Math.min(r.width, r.height) * GUIDE_RATIO;
-  const freeW = Math.max(1, r.width - side), freeH = Math.max(1, r.height - side);
-  const p = pointerXY(e);
-  guidePos.fx = Math.min(1, Math.max(0, gDrag.pos.fx + (p.x - gDrag.start.x) / freeW));
-  guidePos.fy = Math.min(1, Math.max(0, gDrag.pos.fy + (p.y - gDrag.start.y) / freeH));
-  updateGuide(); e.preventDefault();
-});
-function endGuideDrag() {
-  if (gDrag) localStorage.setItem("guideCenter", JSON.stringify(guidePos));
-  gDrag = null;
-}
-guide.addEventListener("pointerup", endGuideDrag);
-guide.addEventListener("pointercancel", endGuideDrag);
-
-// ---------- 開鏡頭 ----------
-async function startCamera() {
-  try {
-    const stream = await navigator.mediaDevices.getUserMedia({
-      video: { facingMode: { ideal: "environment" } }, audio: false,
-    });
-    video.srcObject = stream;
-    await video.play();
-    setTimeout(updateGuide, 300);
-    $("camHint").textContent = "拖曳虛線框可避開反光/陰影；對準單片後按拍照。";
-  } catch (e) {
-    // 退回原生相機（免 HTTPS）：無即時定位框
-    video.style.display = "none";
-    guide.style.display = "none";
-    $("captureBtn").style.display = "none";
-    $("fileFallback").style.display = "block";
-    $("camHint").textContent = "無法開啟即時鏡頭（需 HTTPS 或權限）。改用相機拍照後上傳，拍完仍可手動裁切。";
-  }
-}
-
-// ---------- 凍結影像 ----------
-// 把即時定位框換算成凍結影像的像素區域 → 截圖即對應此框的位置
-function guideRegionInImagePixels() {
-  const rv = video.getBoundingClientRect(), gb = guide.getBoundingClientRect();
-  if (!rv.width || !gb.width) return null;
-  const scale = frozenW / rv.width;   // 影像像素 / CSS px（video 元素無內部留白，等比例）
-  const x = Math.max(0, (gb.left - rv.left) * scale);
-  const y = Math.max(0, (gb.top - rv.top) * scale);
-  const side = Math.min(gb.width * scale, frozenW - x, frozenH - y);
-  return { x, y, side };
-}
-
-function freezeFromVideo() {
-  frozenW = video.videoWidth; frozenH = video.videoHeight;
-  frozen.width = frozenW; frozen.height = frozenH;
-  frozen.getContext("2d").drawImage(video, 0, 0, frozenW, frozenH);
-  enterEdit(guideRegionInImagePixels());
-}
-function freezeFromFile(file) {
+// ---------- 載入相機照片（原生相機，全解析度）----------
+function loadPhoto(file) {
   const img = new Image();
   img.onload = () => {
     frozenW = img.naturalWidth; frozenH = img.naturalHeight;
     frozen.width = frozenW; frozen.height = frozenH;
     frozen.getContext("2d").drawImage(img, 0, 0);
-    enterEdit(null);   // 檔案上傳無即時定位框，預設置中
+    enterEdit();
     URL.revokeObjectURL(img.src);
   };
   img.src = URL.createObjectURL(file);
 }
 
-// ---------- 固定框 + 移動/縮放底圖 ----------
+// ---------- 固定框 + 移動/縮放底圖（原解析度裁切，不縮放）----------
 const FRAME_RATIO = 0.72;    // 固定框佔畫面短邊比例（僅顯示用）
-// 不再固定輸出尺寸：截圖以原解析度裁切（不縮放），尺寸 = 框對應的原始像素邊長，
-// 隨縮放倍率而變（zoom=1 時約等於相機短邊解析度，為最高可得解析度）。
+// 輸出不重採樣：截圖以原解析度裁切，尺寸 = 框對應的原始像素邊長，
+// 隨縮放倍率而變（zoom=1 時約等於照片短邊解析度，為最高可得解析度）。
 let frame = { x: 0, y: 0, size: 0 };       // 固定框在 stage 的矩形
 let tf = { baseS: 1, s: 1, tx: 0, ty: 0 }; // 影像變換：stage 座標 = (tx,ty) + img_px * s
 const zoom = $("zoom");
@@ -242,26 +159,12 @@ function reflow(recenter) {
   applyTransform();
 }
 
-function enterEdit(region) {
-  if (video.srcObject) video.srcObject.getTracks().forEach((t) => t.stop());
-  video.style.display = "none"; guide.style.display = "none";
+function enterEdit() {
+  $("placeholder").style.display = "none";
   frozen.style.display = "block"; cropLayer.style.display = "block";
-  $("liveControls").style.display = "none"; $("editControls").style.display = "block";
-  computeFrame();
-  tf.baseS = Math.max(frame.size / frozenW, frame.size / frozenH); // zoom=1 時剛好覆蓋固定框
-  if (region && region.side > 0) {
-    // 初始裁切對應拍攝時的定位框：把框住的影像區域置中填入固定取景框
-    const z = Math.min(+zoom.max, Math.max(+zoom.min, (frame.size / region.side) / tf.baseS));
-    zoom.value = z;
-    tf.s = tf.baseS * z;
-    const cx = region.x + region.side / 2, cy = region.y + region.side / 2;
-    tf.tx = frame.x + frame.size / 2 - cx * tf.s;
-    tf.ty = frame.y + frame.size / 2 - cy * tf.s;
-    applyTransform();
-  } else {
-    zoom.value = 1;
-    reflow(true);   // 無定位框資訊時置中
-  }
+  $("startControls").style.display = "none"; $("editControls").style.display = "block";
+  zoom.value = 1;
+  reflow(true);   // 置中、整片可見，使用者再縮放/移動對框
   refreshCellInfo();
 }
 
@@ -334,9 +237,9 @@ async function save() {
     const res = await fetch("/api/captures", { method: "POST", body: fd });
     const data = await res.json();
     if (!res.ok) throw new Error(data.detail || "儲存失敗");
-    toast(`已存 ${data.filename}（此格第 ${data.total_in_cell} 張）`);
+    toast(`已存 ${data.filename}（${side}px，此格第 ${data.total_in_cell} 張）`);
     await loadCaptures();
-    retake();
+    backToStart();
   } catch (e) {
     toast(e.message, true);
   } finally {
@@ -344,29 +247,22 @@ async function save() {
   }
 }
 
-function retake() {
+function backToStart() {
   frozen.style.display = "none"; cropLayer.style.display = "none";
-  $("editControls").style.display = "none"; $("liveControls").style.display = "block";
-  $("fileFallback").value = "";   // 清空才能重新選同一個檔案
-  if ($("fileFallback").style.display === "block") { video.style.display = "none"; }
-  else { video.style.display = "block"; startCamera(); }
+  $("placeholder").style.display = "block";
+  $("editControls").style.display = "none"; $("startControls").style.display = "block";
+  $("fileInput").value = "";   // 清空才能重新選/拍同一張
 }
 
 // ---------- 綁定 ----------
-video.addEventListener("loadedmetadata", updateGuide);   // 註冊一次，避免每次重拍累積監聽器
-$("captureBtn").addEventListener("click", freezeFromVideo);
-$("retakeBtn").addEventListener("click", retake);
+$("fileInput").addEventListener("change", (e) => { if (e.target.files[0]) loadPhoto(e.target.files[0]); });
+$("retakeBtn").addEventListener("click", () => { backToStart(); $("fileInput").click(); });
 $("saveBtn").addEventListener("click", save);
-$("fileFallback").addEventListener("change", (e) => { if (e.target.files[0]) freezeFromFile(e.target.files[0]); });
-window.addEventListener("resize", () => {
-  if (guide.style.display === "block") updateGuide();
-  if (cropLayer.style.display === "block") reflow(false);
-});
+window.addEventListener("resize", () => { if (cropLayer.style.display === "block") reflow(false); });
 
 (async function init() {
   await loadConfig();
   await loadCaptures();
-  await startCamera();
 })();
 </script>
 </body>
