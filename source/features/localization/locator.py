@@ -169,20 +169,57 @@ def _masked_zncc_map(f: np.ndarray, f2: np.ndarray, t: np.ndarray, m: np.ndarray
     # FFT 浮點誤差在近零變異視窗可能使分數輕微越界，夾限避免 max 累積偏好虛高分
     return np.clip(num / (np.sqrt(var_f * var_t) + 1e-6), -1.0, 1.0)
 
+def _rotate_template(t: np.ndarray, m0: np.ndarray, pw: int, ph: int, a: float) -> Tuple[np.ndarray, np.ndarray, int, int]:
+    """將模板與遮罩旋轉 a 度，回傳 (旋轉模板 rt, 二值遮罩 m(float32), rw, rh)。"""
+    M = cv2.getRotationMatrix2D((pw / 2.0, ph / 2.0), float(a), 1.0)
+    cos_v, sin_v = abs(M[0, 0]), abs(M[0, 1])
+    rw = int(ph * sin_v + pw * cos_v)
+    rh = int(ph * cos_v + pw * sin_v)
+    M[0, 2] += rw / 2.0 - pw / 2.0
+    M[1, 2] += rh / 2.0 - ph / 2.0
+    rm = cv2.warpAffine(m0, M, (rw, rh), flags=cv2.INTER_NEAREST)
+    m = (rm > 127).astype(np.float32)
+    m = cv2.erode(m, np.ones((3, 3), np.float32))
+    rt = cv2.warpAffine(t, M, (rw, rh))
+    return rt, m, rw, rh
+
+
+def _score_pose(f: np.ndarray, f2: Optional[np.ndarray], rt: np.ndarray,
+                m: np.ndarray, use_zncc: bool) -> Optional[np.ndarray]:
+    """對單一旋轉姿態計算分數圖：高紋理用帶遮罩 ZNCC，低紋理退用彩色帶遮罩 CCORR_NORMED。"""
+    if use_zncc:
+        return _masked_zncc_map(f, f2, rt, m)
+    rt = rt.copy()
+    rt[m < 0.5] = 0
+    z = cv2.matchTemplate(f, rt, cv2.TM_CCORR_NORMED, mask=(m * 255).astype(np.uint8))
+    return np.nan_to_num(z, nan=-1.0, posinf=-1.0, neginf=-1.0)
+
+
 def _global_pose_sweep(
     reference: np.ndarray,
     piece_bgr: np.ndarray,
     piece_alpha: np.ndarray,
     s0: float,
     L_grid: float,
+    rows: int,
+    cols: int,
+    gw: float,
+    gh: float,
+    coarse_step: float = 12.0,
     angle_step: float = 3.0,
+    refine_band: float = 9.0,
+    top_n_refine: int = 100000,  # 預設精修所有網格候選 (低紋理片正確格 coarse 排名可能偏後)
     scale_steps: Tuple[float, ...] = (0.94, 1.0, 1.06),
 ) -> Tuple[np.ndarray, np.ndarray, list, float]:
     """
-    全圖姿態掃描：在降採樣參考圖上，以全 360 度角度與多尺度掃描帶遮罩匹配，
-    將各姿態分數以「中心對齊」方式做逐像素 max 累積。
-    回傳 (分數累積圖, 姿態索引圖, 姿態表, 降採樣比例 RS)。
-    姿態表項目: (angle, ds, rw, rh)。
+    全圖姿態掃描（粗→精兩階段，取代原本 360 度 3° 全圖全掃）：
+      階段 A 粗掃：以 coarse_step(12°) 全 360 度 × 多尺度做全圖帶遮罩匹配，
+                   分數以「中心對齊」逐像素 max 累積。全圖 matchTemplate 次數降為 1/4。
+      階段 B 精修：對每個網格候選（預設 top_n_refine 極大值＝全部格，因低紋理片的
+                   正確格 coarse 排名可能偏後，須全部精修以免漏掉），僅在各候選中心的
+                   小 ROI 內，以 angle_step(3°) 在粗掃最佳角 ±refine_band 範圍與多尺度
+                   精修，補回精確分數/旋轉角。ROI 卷積成本相對全圖卷積可忽略。
+    回傳 (分數累積圖, 姿態索引圖, 姿態表, 降採樣比例 RS)；姿態表項目: (angle, ds, rw, rh)。
 
     高紋理碎片使用帶遮罩 ZNCC (亮度不變)；
     低紋理 (灰階變異過低、ZNCC 退化) 碎片改用彩色帶遮罩 TM_CCORR_NORMED。
@@ -212,6 +249,8 @@ def _global_pose_sweep(
     clean_bgr = piece_bgr.copy()
     clean_bgr[~fg] = 0
 
+    # 每個尺度預先備妥模板 (灰階供 ZNCC、彩色供 CCORR) 與遮罩，粗掃與精修共用。
+    scale_data = []
     for ds in scale_steps:
         s = s0 * RS * ds
         pw = max(4, int(piece_bgr.shape[1] * s))
@@ -219,43 +258,77 @@ def _global_pose_sweep(
         t_bgr = cv2.resize(clean_bgr, (pw, ph), interpolation=cv2.INTER_AREA)
         t_gray = cv2.cvtColor(t_bgr, cv2.COLOR_BGR2GRAY).astype(np.float32)
         m0 = cv2.resize(piece_alpha, (pw, ph), interpolation=cv2.INTER_NEAREST)
+        tmpl = t_gray if use_zncc else t_bgr
+        scale_data.append((float(ds), pw, ph, tmpl, m0))
 
-        for a in np.arange(0.0, 360.0, angle_step):
-            M = cv2.getRotationMatrix2D((pw / 2.0, ph / 2.0), float(a), 1.0)
-            cos_v, sin_v = abs(M[0, 0]), abs(M[0, 1])
-            rw = int(ph * sin_v + pw * cos_v)
-            rh = int(ph * cos_v + pw * sin_v)
-            if rw >= RW or rh >= RH:
-                continue
-            M[0, 2] += rw / 2.0 - pw / 2.0
-            M[1, 2] += rh / 2.0 - ph / 2.0
-            rm = cv2.warpAffine(m0, M, (rw, rh), flags=cv2.INTER_NEAREST)
-            m = (rm > 127).astype(np.float32)
-            m = cv2.erode(m, np.ones((3, 3), np.float32))
-            if m.sum() < 50:
-                continue
+    def _accumulate(z, rw, rh, a, ds):
+        pose_idx = len(pose_table)
+        pose_table.append((float(a), float(ds), rw, rh))
+        zh, zw = z.shape
+        oy, ox = rh // 2, rw // 2
+        sub = acc[oy:oy + zh, ox:ox + zw]
+        sub_pose = pose_map[oy:oy + zh, ox:ox + zw]
+        better = z > sub
+        sub[better] = z[better]
+        sub_pose[better] = pose_idx
 
-            if use_zncc:
-                rt = cv2.warpAffine(t_gray, M, (rw, rh))
-                z = _masked_zncc_map(f, f2, rt, m)
-            else:
-                rt = cv2.warpAffine(t_bgr, M, (rw, rh))
-                rt[m < 0.5] = 0
-                z = cv2.matchTemplate(f, rt, cv2.TM_CCORR_NORMED, mask=(m * 255).astype(np.uint8))
-                z = np.nan_to_num(z, nan=-1.0, posinf=-1.0, neginf=-1.0)
+    # ── 階段 A：粗角度全圖掃描 ──
+    for ds, pw, ph, tmpl, m0 in scale_data:
+        for a in np.arange(0.0, 360.0, coarse_step):
+            rt, m, rw, rh = _rotate_template(tmpl, m0, pw, ph, float(a))
+            if rw >= RW or rh >= RH or m.sum() < 50:
+                continue
+            z = _score_pose(f, f2, rt, m, use_zncc)
             if z is None:
                 continue
+            _accumulate(z, rw, rh, a, ds)
 
-            pose_idx = len(pose_table)
-            pose_table.append((float(a), float(ds), rw, rh))
+    # ── 階段 B：top-N 網格候選的局部 ROI 角度/尺度精修 ──
+    ghs, gws = gh * RS, gw * RS
+    cells = []
+    for r in range(1, rows + 1):
+        for c in range(1, cols + 1):
+            y0, y1 = int((r - 1) * ghs), int(r * ghs)
+            x0, x1 = int((c - 1) * gws), int(c * gws)
+            sub = acc[y0:y1, x0:x1]
+            if sub.size == 0:
+                continue
+            li = np.unravel_index(int(np.argmax(sub)), sub.shape)
+            cells.append((float(sub[li]), y0 + li[0], x0 + li[1]))
+    cells.sort(key=lambda e: -e[0])
 
-            zh, zw = z.shape
-            oy, ox = rh // 2, rw // 2
-            sub = acc[oy:oy + zh, ox:ox + zw]
-            sub_pose = pose_map[oy:oy + zh, ox:ox + zw]
-            better = z > sub
-            sub[better] = z[better]
-            sub_pose[better] = pose_idx
+    for _, cy, cx in cells[:top_n_refine]:
+        pidx = int(pose_map[cy, cx])
+        if pidx < 0:
+            continue
+        a0 = pose_table[pidx][0]
+        for ds, pw, ph, tmpl, m0 in scale_data:
+            for a in np.arange(a0 - refine_band, a0 + refine_band + 1e-6, angle_step):
+                rt, m, rw, rh = _rotate_template(tmpl, m0, pw, ph, float(a))
+                if rw >= RW or rh >= RH or m.sum() < 50:
+                    continue
+                # 在候選中心 (cx, cy) 周圍開一個小 ROI，容許定位點微幅移動。
+                # 精修只在粗掃最佳角附近微調，定位點幾乎不動，視窗取小即可大幅降低 ROI 卷積成本。
+                wnd = max(5, int(0.12 * max(rw, rh)))
+                x0r = max(0, cx - wnd - rw // 2)
+                y0r = max(0, cy - wnd - rh // 2)
+                x1r = min(RW, cx + wnd + rw // 2 + 1)
+                y1r = min(RH, cy + wnd + rh // 2 + 1)
+                if x1r - x0r <= rw or y1r - y0r <= rh:
+                    continue
+                f_roi = f[y0r:y1r, x0r:x1r]
+                f2_roi = f2[y0r:y1r, x0r:x1r] if use_zncc else None
+                z = _score_pose(f_roi, f2_roi, rt, m, use_zncc)
+                if z is None:
+                    continue
+                li = np.unravel_index(int(np.argmax(z)), z.shape)
+                s2 = float(z[li])
+                gx = x0r + li[1] + rw // 2
+                gy = y0r + li[0] + rh // 2
+                if 0 <= gy < RH and 0 <= gx < RW and s2 > acc[gy, gx]:
+                    acc[gy, gx] = s2
+                    pose_map[gy, gx] = len(pose_table)
+                    pose_table.append((float(a), float(ds), rw, rh))
 
     return acc, pose_map, pose_table, RS
 
@@ -472,7 +545,8 @@ def locate_piece(
 
     s0 = 1.0  # norm_bgr 已正規化至網格尺度
     acc, pose_map, pose_table, RS = _global_pose_sweep(
-        reference, norm_bgr, norm_alpha, s0, L_grid
+        reference, norm_bgr, norm_alpha, s0, L_grid,
+        target_rows, target_cols, gw, gh
     )
 
     # 以網格為單位取每格最高分，排序產生候選
