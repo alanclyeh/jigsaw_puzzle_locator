@@ -17,6 +17,9 @@
   #cropLayer { position:absolute; inset:0; display:none; touch-action:none; cursor:grab; }
   #cropLayer:active { cursor:grabbing; }
   #cropBox { position:absolute; border:2px solid var(--ok); box-shadow:0 0 0 9999px rgba(0,0,0,.5); pointer-events:none; }
+  /* 虛線參考框：提示單片（含凸耳）大約縮放到此大小，四周留邊 */
+  #cropGuide { position:absolute; inset:14%; border:2px dashed rgba(255,255,255,.85); border-radius:4px; pointer-events:none; }
+  #cropGuide .lbl { position:absolute; left:50%; bottom:-22px; transform:translateX(-50%); white-space:nowrap; font-size:11px; color:rgba(255,255,255,.9); text-shadow:0 1px 2px #000; }
   #placeholder { color:var(--muted); font-size:15px; text-align:center; padding:0 30px; line-height:1.7; }
   .controls { padding:10px 14px; border-top:1px solid var(--line); background:var(--panel); display:flex; flex-direction:column; gap:10px; }
   .row { display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
@@ -66,7 +69,7 @@
   <div id="placeholder">用相機拍一張單片<br>拍完可在綠框內裁切（原解析度）</div>
   <canvas id="frozen"></canvas>
   <div id="cropLayer">
-    <div id="cropBox"></div>
+    <div id="cropBox"><div id="cropGuide"><span class="lbl">單片約縮放到此框</span></div></div>
   </div>
 </div>
 
@@ -309,6 +312,7 @@ async function save() {
     if (!res.ok) throw new Error(data.detail || "儲存失敗");
     toast(`已存 ${data.filename}（${side}px，此格第 ${data.total_in_cell} 張）`);
     await loadCaptures();
+    $("colInput").value = ""; $("rowInput").value = ""; refreshCellInfo();  // 存檔成功後清空行列，避免下一片誤存到同格
     backToStart();
   } catch (e) {
     toast(e.message, true);
