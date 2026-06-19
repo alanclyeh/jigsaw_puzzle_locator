@@ -291,7 +291,7 @@ async function save() {
     if (!res.ok) throw new Error(data.detail || "儲存失敗");
     toast(`已存 ${data.filename}（${side}px，此格第 ${data.total_in_cell} 張）`);
     await loadCaptures();
-    $("colInput").value = ""; $("rowInput").value = "";  // 存檔成功後清空行列，避免下一片誤存到同格
+    $("colInput").value = ""; $("rowInput").value = ""; refreshCellInfo();  // 存檔成功後清空行列，避免下一片誤存到同格
     backToStart();
   } catch (e) {
     toast(e.message, true);
