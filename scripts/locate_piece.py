@@ -180,13 +180,16 @@ def main():
                 print(f"  第 {i} 名: 第 {gp[0]} 行 第 {gp[1]} 列  "
                       f"(分數 {c.get('score', 0):.3f}, 旋轉 {c.get('rotation', 0):.0f} 度)")
     region = getattr(result, "region_hint", None)
-    if region is not None:
+    if region is not None and region.get("reason") == "saturated":
+        print("\n⚠️ 紋理不足／分數飽和（完成圖以洋紅框標示）：rank1 不可信，無法可靠定位。")
+        print("   建議人工判斷或跳過此片（純色/低紋理片本質難以自動定位）。")
+    elif region is not None and "row_range" in region:
         r0, r1 = region["row_range"]
         c0, c1 = region["col_range"]
-        print("\n⚠️ 未找到明確單一格，但前幾名集中，建議大概搜尋區塊（請在此範圍內逐格嘗試）：")
-        print(f"   列 {r0}~{r1}、行 {c0}~{c1}（完成圖上以洋紅框標示）")
-    elif len(getattr(result, "top_cells", []) or []) > 1:
-        print("\nℹ️ 最可能為第 1 名（候選較分散）；若不符，請依上方清單試第 2、3 名。")
+        print("\n⚠️ 未確定單一位置（完成圖以洋紅框標示）：")
+        print(f"   建議在 列 {r0}~{r1}、行 {c0}~{c1}（第 1 名週圍 ±5 格）範圍內逐格搜尋。")
+    elif result.grid_pos is not None:
+        print("\n✓ 位置確定（完成圖以綠框標示）：採用第 1 名。")
 
     print(f"\n[輸出成果儲存路徑]")
     print(f"1. 去背乾淨碎片: {clean_out_path.absolute()}")
