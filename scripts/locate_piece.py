@@ -171,6 +171,22 @@ def main():
         if gt_row is not None and gt_col is not None:
             print(f"檔名真實網格位置: 第 {gt_row} 行，第 {gt_col} 列")
         
+    # 方案1：Top-K 候選清單 + 找不到精確位置時的搜尋區塊建議（單片+輔助情境）
+    if getattr(result, "top_cells", None):
+        print("\n---- 候選位置 Top-K（可由此清單挑選） ----")
+        for i, c in enumerate(result.top_cells, 1):
+            gp = c.get("grid_pos")
+            if gp:
+                print(f"  第 {i} 名: 第 {gp[0]} 行 第 {gp[1]} 列  "
+                      f"(分數 {c.get('score', 0):.3f}, 旋轉 {c.get('rotation', 0):.0f} 度)")
+    region = getattr(result, "region_hint", None)
+    if region is not None:
+        r0, r1 = region["row_range"]; c0, c1 = region["col_range"]
+        print("\n⚠️ 未找到明確單一格，但前幾名集中，建議大概搜尋區塊（請在此範圍內逐格嘗試）：")
+        print(f"   列 {r0}~{r1}、行 {c0}~{c1}（完成圖上以洋紅框標示）")
+    elif len(getattr(result, "top_cells", []) or []) > 1:
+        print("\nℹ️ 最可能為第 1 名（候選較分散）；若不符，請依上方清單試第 2、3 名。")
+
     print(f"\n[輸出成果儲存路徑]")
     print(f"1. 去背乾淨碎片: {clean_out_path.absolute()}")
     print(f"2. 標註落點完成圖: {located_out_path.absolute()}")
