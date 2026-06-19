@@ -1,7 +1,7 @@
 import cv2
 import numpy as np
-from dataclasses import dataclass
-from typing import Tuple, List, Optional
+from dataclasses import dataclass, field
+from typing import Tuple, List, Optional, Dict, Any
 
 @dataclass
 class LocateResult:
@@ -14,6 +14,38 @@ class LocateResult:
     candidates: List[Tuple[int, int, int, int, float]]  # 候選框清單 [(x, y, w, h, score), ...]
     grid_pos: Optional[Tuple[int, int]] # (row, col)，1-indexed
     annotated_reference: np.ndarray    # 已畫框 of 完成圖
+    # 方案1：Top-K 候選清單，供使用者從前幾名挑選（單片+輔助情境）。
+    # 每項 {'grid_pos': (row, col), 'score': float, 'rotation': float}，依分數由高到低。
+    top_cells: List[Dict[str, Any]] = field(default_factory=list)
+    # 找不到明確單一位置時，建議的「大概搜尋區塊」（候選分散時才有值）：
+    # {'row_range': (r0, r1), 'col_range': (c0, c1), 'note': str}；None 代表 grid_pos 可信。
+    region_hint: Optional[Dict[str, Any]] = None
+
+
+# Top-K 候選聚攏判定門檻：前幾名落在 (CLUSTER_SPAN+1)² 格內才視為「集中於一小區」
+_REGION_CLUSTER_SPAN = 2
+
+
+def _build_region_hint(top_cells: List[Dict[str, Any]], rows: int, cols: int) -> Optional[Dict[str, Any]]:
+    """當前幾名候選「集中於一小區」時，回傳該小區作為人工搜尋區塊建議；否則回 None。
+
+    設計依據（實證）：rank1 常是對的、而 rank2/3 多為分散雜訊，故「候選分散」不代表
+    rank1 不可信——此時應以 rank1 為最佳猜測、Top-K 清單為備援，而非畫一個橫跨半張圖的
+    無用大框。只有當前幾名彼此相鄰、明顯指向同一小區時，該小區才是有用的「大概位置」。
+    """
+    cells = [c['grid_pos'] for c in top_cells if c.get('grid_pos')]
+    if len(cells) <= 1:
+        return None  # 只有一個候選 → 直接用 grid_pos，無需區塊
+    rs = [r for r, _ in cells]
+    cs = [c for _, c in cells]
+    if (max(rs) - min(rs)) > _REGION_CLUSTER_SPAN or (max(cs) - min(cs)) > _REGION_CLUSTER_SPAN:
+        return None  # 候選分散 → 不畫無用大框，改以 Top-K 清單為備援
+    r0, r1, c0, c1 = min(rs), max(rs), min(cs), max(cs)
+    return {
+        'row_range': (r0, r1),
+        'col_range': (c0, c1),
+        'note': f"前幾名集中於 列{r0}~{r1}、行{c0}~{c1} 一小區，建議在此範圍內逐格嘗試",
+    }
 
 def _draw_dashed_line(img: np.ndarray, pt1: Tuple[int, int], pt2: Tuple[int, int], color: Tuple[int, int, int], thickness: int = 1, dash_length: int = 8):
     """繪製虛線段的輔助函數"""
@@ -525,6 +557,8 @@ def locate_piece(
 
         cv2.putText(annotated, info_text, (x, text_y), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
 
+        sift_top = ([{'grid_pos': grid_pos, 'score': confidence, 'rotation': rotation_deg}]
+                    if grid_pos is not None else [])
         return LocateResult(
             quad=quad,
             bounding_box=bounding_box,
@@ -534,7 +568,9 @@ def locate_piece(
             method="feature",
             candidates=[],
             grid_pos=grid_pos,
-            annotated_reference=annotated
+            annotated_reference=annotated,
+            top_cells=sift_top,
+            region_hint=None,  # 特徵匹配成功＝精確，無需區塊建議
         )
 
     # 3. SIFT 失敗，進入全圖姿態掃描帶遮罩模板匹配保底方案。
@@ -589,10 +625,26 @@ def locate_piece(
     for idx, cand in enumerate(top_candidates):
         print(f"  - Rank {idx+1}: score={cand['score']:.4f}, bbox={cand['bbox']}, grid={cand['grid_pos']}, rot={cand['rot']:.1f}")
 
+    # 方案1：Top-K 候選清單（供使用者挑選）與「找不到精確位置時的搜尋區塊建議」
+    top_cells = [{'grid_pos': c['grid_pos'], 'score': c['score'], 'rotation': c['rot']}
+                 for c in top_candidates]
+    region_hint = None
+    if rows is not None and cols is not None and top_cells:
+        region_hint = _build_region_hint(top_cells, target_rows, target_cols)
+
     if top_candidates:
         best = top_candidates[0]
         bx, by, bw, bh = best['bbox']
         cv2.rectangle(annotated, (bx, by), (bx + bw, by + bh), (0, 255, 0), 3)
+
+        # 不精確時，於完成圖標出建議搜尋區塊（洋紅大框 + 文字），引導人工在此範圍內試
+        if region_hint is not None:
+            (r0, r1), (c0, c1) = region_hint['row_range'], region_hint['col_range']
+            rx0, ry0 = int((c0 - 1) * gw), int((r0 - 1) * gh)
+            rx1, ry1 = int(c1 * gw), int(r1 * gh)
+            cv2.rectangle(annotated, (rx0, ry0), (rx1, ry1), (255, 0, 255), 4)
+            cv2.putText(annotated, f"Search zone R{r0}-{r1} C{c0}-{c1}",
+                        (rx0, max(24, ry0 - 12)), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 0, 255), 2)
 
         info_text = f"Rank 1 (Score: {best['score']:.2f}, Rot: {best['rot']:.1f}deg)"
         if rows is not None and cols is not None:
@@ -641,5 +693,7 @@ def locate_piece(
         method="template",
         candidates=candidates_out,
         grid_pos=grid_pos,
-        annotated_reference=annotated
+        annotated_reference=annotated,
+        top_cells=top_cells,
+        region_hint=region_hint,
     )
