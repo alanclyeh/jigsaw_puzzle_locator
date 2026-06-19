@@ -129,10 +129,10 @@ def main():
     ref_h, ref_w = ref_img.shape[:2]
     
     # 找出所有符合 pieces_c*_r*.jpg 等命名格式的碎片
-    # 單片資料現分流於 eval_native/（應命中集）與 eval_hard/（已知無解片）；
-    # 仍掃 data 根以相容舊放法。
+    # 單片資料現分流於 eval_native/（應命中集，含待救的 xfail 片）與
+    # eval_unsolvable/（本質無解片：慘白無紋理 + aliasing）；仍掃 data 根以相容舊放法。
     piece_files = []
-    for sub in ["eval_native", "eval_hard", "."]:
+    for sub in ["eval_native", "eval_unsolvable", "."]:
         d = data_dir / sub
         if not d.exists():
             continue
