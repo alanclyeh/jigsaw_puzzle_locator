@@ -159,9 +159,10 @@ def test_suggested_rotation_consistency():
 # ---------------------------------------------------------------------------
 # 真實照片整合驗證：data/eval_native/pieces_c<col>_r<row>.jpg 檔名即 ground truth
 # （單片照已統一為原解析度方形裁切，集中於 eval_native/）
-# 註：KNOWN_HARD 列的已知無解片已移至 data/eval_native 以外的 data/eval_hard/
-#     （保留為參考資料，不納入此 gated glob）；故本測試實際只跑「應命中」集。
-#     KNOWN_HARD dict 仍保留作為無解原因的文件記錄與日後回測之用。
+# 註：data/eval_native/ 只放「應可靠命中」集（11 片基準）。經 L0/L1/L2 系統量測證實，
+#     單片 appearance 匹配對 hard 片的天花板僅 ~55%，無可靠演算法可救（詳見記憶與 doc 紀錄），
+#     故 18 片 hard 全數歸入 data/eval_unsolvable/（不納入此 glob）。
+#     KNOWN_HARD dict 保留作為各無解片的原因文件記錄。
 # ---------------------------------------------------------------------------
 
 def _load_grid_config() -> tuple:
@@ -181,8 +182,11 @@ def _load_grid_config() -> tuple:
 #            CLAUDE.md 禁止修改 segmentation 模組。
 # strict=False：若日後演算法改進使某片轉為命中，pytest 標記 XPASS 而不讓套件失敗。
 KNOWN_HARD = {
+    # 註：全部 hard 片現存於 data/eval_unsolvable/（不被 glob），本 dict 純為原因文件記錄。
+    #     c17_r17 曾以全解析度梯度+ZNCC 重排試救，但實測 flaky（pipeline 含 GrabCut 非決定性，
+    #     run 間 HIT/MISS 翻動），不可靠故不採用；重排原型保留於分支 experiment/fullres-rerank-c17r17。
+    "pieces_c17_r17": "A 低紋理區，GT 排名 ~21；全解析度重排僅偶爾命中(flaky)，不可靠",
     "pieces_c10_r40": "A 低紋理區，GT ZNCC 排名 79/1000",
-    "pieces_c17_r17": "A 低紋理區，GT 排名 17 (3 尺度)；單尺度高解析度可命中但會回歸 c2_r32，故不採用",
     "pieces_c1_r1":   "A 左上角落低紋理，GT 排名 337/1000",
     "pieces_c1_r39":  "A 左下邊緣低紋理，GT 排名 50/1000",
     "pieces_c1_r40":  "A 左下角落低紋理，GT 排名 325/1000",
@@ -196,7 +200,8 @@ KNOWN_HARD = {
     "pieces_c21_r6":  "B 去背殘片，主體長寬比 2.54 (應約 1:1)",
     "pieces_c25_r1":  "B 去背殘片，主體長寬比 1.75；右上角落低紋理",
     "pieces_c25_r7":  "B 去背殘片，主體長寬比 6.92 (嚴重殘缺)",
-    # 經原生相機高解析度批盲測發現之無解片（scripts/eval_dataset.py 量測）；現存於 data/eval_hard/
+    # 本質無解片（現存於 data/eval_unsolvable/）：c19_r21 為 aliasing 圖案重複；
+    # 其餘慘白無紋理片(c1_r1,c21_r5,c21_r6,c23_r4,c23_r5,c25_r1)分數整片飽和、無資訊。
     "pieces_c19_r21": "A row 方向歧義：298 與高解析度版皆預測 r11 c19 (col 對、row 飄 10)",
     "pieces_c23_r4":  "A 誤匹配：高解析度版 conf≈1.0 卻定位 r6 c3 (帶遮罩相關假峰值)",
     "pieces_c10_r1":  "A 頂邊低辨識度脆弱片：原非方形版可命中，統一方形裁切後回歸 (預測 r31 c5, conf 0.49)",
