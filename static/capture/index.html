@@ -109,7 +109,7 @@
     <div class="row">
       <label>縮放</label>
       <input type="range" id="zoom" min="1" max="5" step="0.01" value="1">
-      <span class="pill">拖曳移動、縮放底圖，讓單片落在綠框內</span>
+      <span class="pill" id="resInfo">—</span>
     </div>
     <div class="row">
       <label>列 row</label>
@@ -168,6 +168,9 @@ function loadPhoto(file) {
 
 // ---------- 固定框 + 移動/縮放底圖（原解析度裁切，不縮放）----------
 const FRAME_RATIO = 0.72;    // 固定框佔畫面短邊比例（僅顯示用）
+// 裁切原解析度下限：實證低於此值（碎片在畫面佔比太小/拍太遠）會嚴重掉辨識率
+// （eval_consistent 298px 批僅 36%；填滿畫面的 753px+ 批達 100%）。
+const MIN_CROP_PX = 600;
 // 輸出不重採樣：截圖以原解析度裁切，尺寸 = 框對應的原始像素邊長，
 // 隨縮放倍率而變（zoom=1 時約等於照片短邊解析度，為最高可得解析度）。
 let frame = { x: 0, y: 0, size: 0 };       // 固定框在 stage 的矩形
@@ -191,6 +194,20 @@ function clampPan() {
 function applyTransform() {
   clampPan();
   frozen.style.transform = `translate(${tf.tx}px, ${tf.ty}px) scale(${tf.s})`;
+  updateResInfo();
+}
+
+// 目前綠框對應的原始像素邊長（= 將輸出的解析度）
+function currentCropPx() {
+  return tf.s ? Math.round(frame.size / tf.s) : 0;
+}
+function updateResInfo() {
+  const el = $("resInfo"); if (!el) return;
+  const px = currentCropPx();
+  const ok = px >= MIN_CROP_PX;
+  el.textContent = ok ? `解析度 ${px}px ✓` : `解析度 ${px}px：太小，請靠近/縮小縮放`;
+  el.style.background = ok ? "#1f6feb" : "#b3261e";
+  el.style.color = "#fff";
 }
 
 // 重排：依目前 zoom 重算尺度。recenter=true 把影像置中；否則維持固定框中心對到的影像點
@@ -272,6 +289,10 @@ async function save() {
   const sx = (frame.x - tf.tx) / tf.s, sy = (frame.y - tf.ty) / tf.s;
   const sSide = frame.size / tf.s;
   const side = Math.max(1, Math.round(sSide));
+  // 品質閘：裁切原解析度過低（碎片拍太小/太遠）會嚴重掉辨識率，擋下並提示填滿畫面
+  if (side < MIN_CROP_PX) {
+    return toast(`碎片太小：裁切僅 ${side}px（需 ≥${MIN_CROP_PX}px）。請靠近讓單片填滿綠框、或把縮放調回 1 後重拍。`, true);
+  }
   const out = document.createElement("canvas");
   out.width = side; out.height = side;
   out.getContext("2d").drawImage(frozen, sx, sy, sSide, sSide, 0, 0, side, side);
