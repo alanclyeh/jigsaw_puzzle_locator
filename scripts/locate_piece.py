@@ -181,7 +181,8 @@ def main():
                       f"(分數 {c.get('score', 0):.3f}, 旋轉 {c.get('rotation', 0):.0f} 度)")
     region = getattr(result, "region_hint", None)
     if region is not None:
-        r0, r1 = region["row_range"]; c0, c1 = region["col_range"]
+        r0, r1 = region["row_range"]
+        c0, c1 = region["col_range"]
         print("\n⚠️ 未找到明確單一格，但前幾名集中，建議大概搜尋區塊（請在此範圍內逐格嘗試）：")
         print(f"   列 {r0}~{r1}、行 {c0}~{c1}（完成圖上以洋紅框標示）")
     elif len(getattr(result, "top_cells", []) or []) > 1:

@@ -6,7 +6,7 @@ import cv2
 import numpy as np
 import pytest
 from tests._synthetic import generate_synthetic_piece
-from source.features.localization.locator import locate_piece
+from source.features.localization.locator import locate_piece, _build_region_hint
 from source.features.segmentation.detector import segment_pieces, extract_piece_images
 
 DATA_DIR = Path(__file__).parent.parent / "data"
@@ -268,3 +268,29 @@ def test_real_piece_grid_localization(reference_image, piece_path, gt_row, gt_co
     assert row_err <= 1 and col_err <= 1, (
         f"網格誤差過大: 預測 (r{pred_row}, c{pred_col}) vs 真值 (r{gt_row}, c{gt_col})"
     )
+
+
+# ---------------------------------------------------------------------------
+# 方案1：_build_region_hint 純函式單元測試（候選集中→給區塊；分散/單一→None）
+# ---------------------------------------------------------------------------
+def _cells(*pairs):
+    return [{"grid_pos": p, "score": 0.5, "rotation": 0.0} for p in pairs]
+
+
+def test_region_hint_clustered_returns_zone():
+    """前幾名集中於一小區 → 回傳涵蓋它們的搜尋區塊。"""
+    hint = _build_region_hint(_cells((5, 10), (6, 10), (5, 11)))
+    assert hint is not None
+    assert hint["row_range"] == (5, 6)
+    assert hint["col_range"] == (10, 11)
+
+
+def test_region_hint_dispersed_returns_none():
+    """前幾名分散 → 回 None（不畫無用大框，改以 rank1 + Top-K 清單為備援）。"""
+    assert _build_region_hint(_cells((19, 6), (22, 7), (27, 22))) is None
+
+
+def test_region_hint_single_or_empty_returns_none():
+    """只有一個或沒有候選 → 回 None（直接用 grid_pos）。"""
+    assert _build_region_hint(_cells((3, 3))) is None
+    assert _build_region_hint([]) is None
