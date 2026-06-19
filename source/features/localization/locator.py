@@ -26,7 +26,7 @@ class LocateResult:
 _REGION_CLUSTER_SPAN = 2
 
 
-def _build_region_hint(top_cells: List[Dict[str, Any]], rows: int, cols: int) -> Optional[Dict[str, Any]]:
+def _build_region_hint(top_cells: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
     """當前幾名候選「集中於一小區」時，回傳該小區作為人工搜尋區塊建議；否則回 None。
 
     設計依據（實證）：rank1 常是對的、而 rank2/3 多為分散雜訊，故「候選分散」不代表
@@ -630,7 +630,7 @@ def locate_piece(
                  for c in top_candidates]
     region_hint = None
     if rows is not None and cols is not None and top_cells:
-        region_hint = _build_region_hint(top_cells, target_rows, target_cols)
+        region_hint = _build_region_hint(top_cells)
 
     if top_candidates:
         best = top_candidates[0]
