@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """L2 快取式離線評估器：粗掃只跑一次存快取，迭代評分變體用快取秒出排名。
 
-build  : 對 eval_native 22 片做 segment+正規化+粗掃，存 top-K 候選格(含姿態)與 nb/na 快取。
+build  : 對 eval_native 各片做 segment+正規化+粗掃，存 top-K 候選格(含姿態)與 nb/na 快取。
+         （KNOWN_HARD_STEMS 為本腳本獨立的「待救片」分類，與 test_localization.KNOWN_HARD 用途不同）
 eval   : 讀快取，對 top-K 候選用「全解析度評分變體」重排，印每片 GT 排名 + 是否 ±1 命中。
 
 用法：
