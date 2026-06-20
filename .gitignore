@@ -22,3 +22,6 @@ output/*
 .vscode/
 .idea/
 scratch/
+
+# 標註結果圖（產出物，本機保留、不入版控）
+docs/eval_consistent_annot/*.png
