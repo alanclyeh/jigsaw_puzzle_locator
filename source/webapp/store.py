@@ -8,9 +8,11 @@
 """
 from __future__ import annotations
 
+import functools
 import json
 import shutil
 import sqlite3
+import threading
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
@@ -64,6 +66,23 @@ class Store:
         self._conn.execute("PRAGMA foreign_keys = ON")
         self._conn.executescript(_SCHEMA)
         self._conn.commit()
+        # FastAPI 同步端點跑在 threadpool（多執行緒），與 async 端點共用單一連線；
+        # 以一把 RLock 序列化所有公開 DB 方法，避免並發 execute 交錯。RLock 容許
+        # 方法間互呼（如 confirm_piece → get_piece）不自鎖死。
+        self._lock = threading.RLock()
+        for _name in (
+            "create_project", "get_project", "list_projects", "delete_project",
+            "create_piece", "get_piece", "list_pieces", "confirm_piece",
+            "set_confirmed_flag", "delete_piece", "confirmed_cells",
+        ):
+            setattr(self, _name, self._synchronized(getattr(self, _name)))
+
+    def _synchronized(self, fn):
+        @functools.wraps(fn)
+        def wrapper(*args, **kwargs):
+            with self._lock:
+                return fn(*args, **kwargs)
+        return wrapper
 
     def close(self) -> None:
         self._conn.close()
