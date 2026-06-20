@@ -1,0 +1,7 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    { "name": "capture", "runtimeExecutable": "python3", "runtimeArgs": ["scripts/run_capture_server.py", "--no-tls", "--port", "8000"], "port": 8000 },
+    { "name": "locator-static", "runtimeExecutable": "python3", "runtimeArgs": ["-m", "http.server", "4599", "--directory", "static/locator"], "port": 4599 }
+  ]
+}
