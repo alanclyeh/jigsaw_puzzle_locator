@@ -227,12 +227,67 @@ function reflow(recenter) {
   applyTransform();
 }
 
+// 偵測單片：以照片四角取樣背景色（採集墊為單色），凡與背景差異大的像素即視為單片，
+// 回傳其在「原始影像座標」的外接矩形（含些微外擴以涵蓋凸耳/陰影）；偵測不到回 null。
+const AUTOFIT_FILL = 0.86;     // 自動框後單片約佔綠框 86%，留邊看凸耳
+const BG_DIST_TH = 48;         // 與背景色的 RGB 距離門檻（小於此視為背景）
+function detectPieceBBox() {
+  const N = 240;                                  // 縮小取樣以加速
+  const sc = N / Math.max(frozenW, frozenH);
+  const w = Math.max(1, Math.round(frozenW * sc)), h = Math.max(1, Math.round(frozenH * sc));
+  const c = document.createElement("canvas"); c.width = w; c.height = h;
+  const ctx = c.getContext("2d", { willReadFrequently: true });
+  ctx.drawImage(frozen, 0, 0, w, h);
+  const d = ctx.getImageData(0, 0, w, h).data;
+  // 四角取樣背景色（取各通道中位數，對單一被單片污染的角穩健）
+  const corners = [[1, 1], [w - 2, 1], [1, h - 2], [w - 2, h - 2]];
+  const rs = [], gs = [], bs = [];
+  for (const [x, y] of corners) { const i = (y * w + x) * 4; rs.push(d[i]); gs.push(d[i + 1]); bs.push(d[i + 2]); }
+  const med = (a) => { const s = a.slice().sort((p, q) => p - q); return (s[(s.length - 1) >> 1] + s[s.length >> 1]) / 2; };
+  const br = med(rs), bg = med(gs), bb = med(bs);
+  let minx = w, miny = h, maxx = -1, maxy = -1, cnt = 0;
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    const i = (y * w + x) * 4;
+    const dr = d[i] - br, dg = d[i + 1] - bg, db = d[i + 2] - bb;
+    if (dr * dr + dg * dg + db * db > BG_DIST_TH * BG_DIST_TH) {  // 與背景差異大 → 單片
+      if (x < minx) minx = x; if (x > maxx) maxx = x;
+      if (y < miny) miny = y; if (y > maxy) maxy = y; cnt++;
+    }
+  }
+  if (maxx < 0 || cnt < w * h * 0.01) return null;                 // 幾乎沒前景 → 失敗
+  const bw = maxx - minx + 1, bh = maxy - miny + 1;
+  if (bw > w * 0.97 && bh > h * 0.97) return null;                 // 幾乎滿版 → 背景判斷失敗
+  const pad = 0.06;
+  const x0 = Math.max(0, (minx - bw * pad) / sc), y0 = Math.max(0, (miny - bh * pad) / sc);
+  const x1 = Math.min(frozenW, (maxx + bw * pad) / sc), y1 = Math.min(frozenH, (maxy + bh * pad) / sc);
+  return { x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
+}
+
+// 自動把偵測到的單片縮放置中到綠框（使用者仍可拖曳/縮放微調）。成功回 true。
+function autoFitPiece() {
+  const bb = detectPieceBBox();
+  if (!bb) return false;
+  computeFrame();
+  tf.baseS = Math.max(frame.size / frozenW, frame.size / frozenH);
+  tf.s = frame.size * AUTOFIT_FILL / Math.max(bb.w, bb.h);
+  let z = tf.s / tf.baseS;
+  if (z < +zoom.min) { z = +zoom.min; tf.s = tf.baseS * z; }
+  if (z > +zoom.max) zoom.max = z.toFixed(2);   // 必要時擴充滑桿上限，使其反映實際倍率
+  zoom.value = z;
+  const cx = frame.x + frame.size / 2, cy = frame.y + frame.size / 2;
+  tf.tx = cx - (bb.x + bb.w / 2) * tf.s;
+  tf.ty = cy - (bb.y + bb.h / 2) * tf.s;
+  applyTransform();
+  return true;
+}
+
 function enterEdit() {
   $("placeholder").style.display = "none";
   frozen.style.display = "block"; cropLayer.style.display = "block";
   $("startControls").style.display = "none"; $("editControls").style.display = "block";
-  zoom.value = 1;
-  reflow(true);   // 置中、整片可見，使用者再縮放/移動對框
+  zoom.max = 5; zoom.value = 1;        // 每片重置滑桿範圍，避免上限被前一片的自動框撐大殘留
+  reflow(true);                       // 先置中整片可見（自動框失敗時的後備）
+  if (autoFitPiece()) toast("已自動框住單片，可再拖曳/縮放微調");
   refreshCellInfo();
 }
 
