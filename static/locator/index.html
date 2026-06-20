@@ -1,0 +1,818 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>Puzzle Locator</title>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+  html, body {
+    min-height:100%;
+    font-family:-apple-system, BlinkMacSystemFont, "PingFang TC", "Noto Sans TC", "Microsoft JhengHei", system-ui, sans-serif;
+    background:radial-gradient(120% 120% at 50% 0%,#f3f5fa 0%,#e3e6ee 60%,#d8dbe6 100%);
+  }
+  body { display:flex; align-items:center; justify-content:center; min-height:100vh; padding:28px 16px; }
+  input { font-family:inherit; }
+
+  /* device shell */
+  .device {
+    position:relative; width:392px; height:844px; background:#0b1020;
+    border-radius:52px; padding:11px; flex:none;
+    box-shadow:0 40px 90px -30px rgba(15,23,42,.55),0 0 0 2px rgba(255,255,255,.04) inset;
+  }
+  .screen-inner {
+    position:relative; width:100%; height:100%; background:#f7f8fb;
+    border-radius:42px; overflow:hidden; display:flex; flex-direction:column;
+  }
+
+  /* status bar */
+  .statusbar {
+    position:relative; z-index:40; height:50px; flex:none; display:flex;
+    align-items:flex-end; justify-content:space-between; padding:0 26px 8px; color:#0f172a;
+  }
+  .statusbar .notch {
+    position:absolute; left:50%; top:9px; transform:translateX(-50%);
+    width:108px; height:30px; background:#0b1020; border-radius:18px;
+  }
+
+  .stage { position:relative; flex:1; min-height:0; display:flex; flex-direction:column; }
+  .scroll { flex:1; min-height:0; overflow-y:auto; }
+  .hidden { display:none !important; }
+
+  /* generic helpers reused from design */
+  .pill-info {
+    position:absolute; background:rgba(15,23,42,.6); backdrop-filter:blur(6px);
+    color:#fff; font-size:12px; font-weight:600; padding:7px 13px; border-radius:20px; white-space:nowrap;
+  }
+  .frame-corner { position:absolute; width:22px; height:22px; }
+
+  /* tap feedback */
+  [data-tap] { transition:transform .08s ease, opacity .15s ease; }
+  [data-tap]:active { transform:scale(.97); }
+
+  /* range slider */
+  input[type=range] { -webkit-appearance:none; appearance:none; background:transparent; height:18px; }
+  input[type=range]::-webkit-slider-runnable-track { height:4px; border-radius:3px; background:#d7dce6; }
+  input[type=range]::-webkit-slider-thumb { -webkit-appearance:none; appearance:none; width:18px; height:18px; margin-top:-7px; border-radius:50%; background:#2563eb; box-shadow:0 2px 6px rgba(37,99,235,.5); cursor:pointer; }
+  input[type=range]::-moz-range-track { height:4px; border-radius:3px; background:#d7dce6; }
+  input[type=range]::-moz-range-thumb { width:18px; height:18px; border:none; border-radius:50%; background:#2563eb; cursor:pointer; }
+
+  /* the shared "completed puzzle" artwork (sunset / galaxy) */
+  .art { position:absolute; inset:0; }
+  .art .sky { position:absolute; inset:0; background:linear-gradient(180deg,#1e3a8a 0%,#5b21b6 20%,#be185d 40%,#f97316 58%,#fbbf24 70%,#fde68a 74%); }
+  .art .sun { position:absolute; left:54%; top:20%; width:24%; aspect-ratio:1; transform:translate(-50%,-50%); border-radius:50%; background:radial-gradient(circle,#fffbeb 0%,#fde68a 38%,rgba(251,191,36,0) 72%); }
+  .art .hills { position:absolute; left:0; right:0; bottom:30%; height:34%; background:linear-gradient(180deg,#3b0764,#4c1d95); clip-path:polygon(0 60%,14% 30%,26% 52%,40% 18%,55% 46%,70% 22%,84% 50%,100% 32%,100% 100%,0 100%); }
+  .art .ground { position:absolute; left:0; right:0; bottom:0; height:30%; background:linear-gradient(180deg,#6d28d9,#312e81 60%,#1e1b4b); }
+
+  @keyframes locpulse{0%{box-shadow:0 0 0 0 rgba(37,99,235,.55);}70%{box-shadow:0 0 0 14px rgba(37,99,235,0);}100%{box-shadow:0 0 0 0 rgba(37,99,235,0);}}
+  @keyframes scanline{0%{top:6%;}100%{top:94%;}}
+  @keyframes spin{to{transform:rotate(360deg);}}
+  @keyframes fadeUp{from{opacity:0;transform:translateY(10px);}to{opacity:1;transform:translateY(0);}}
+  @keyframes blink{0%,100%{opacity:1;}50%{opacity:.25;}}
+  @keyframes ringgrow{0%{transform:translate(-50%,-50%) scale(.6);opacity:.9;}100%{transform:translate(-50%,-50%) scale(2.4);opacity:0;}}
+  .fadeUp { animation:fadeUp .28s ease both; }
+
+  @media (max-width:430px){
+    body{ padding:0; align-items:flex-start; }
+    .device{ width:100vw; height:100vh; border-radius:0; padding:0; box-shadow:none; }
+    .screen-inner{ border-radius:0; }
+  }
+</style>
+</head>
+<body>
+  <div class="device">
+    <div class="screen-inner">
+
+      <!-- status bar -->
+      <div class="statusbar">
+        <span style="font-size:15px;font-weight:700;letter-spacing:.3px;">9:41</span>
+        <div class="notch"></div>
+        <div style="display:flex;align-items:center;gap:6px;">
+          <svg width="18" height="12" viewBox="0 0 18 12" fill="none"><rect x="0" y="7" width="3" height="5" rx="1" fill="#0f172a"/><rect x="5" y="4.5" width="3" height="7.5" rx="1" fill="#0f172a"/><rect x="10" y="2" width="3" height="10" rx="1" fill="#0f172a"/><rect x="15" y="0" width="3" height="12" rx="1" fill="#0f172a"/></svg>
+          <svg width="22" height="12" viewBox="0 0 22 12" fill="none"><rect x="1" y="1" width="18" height="10" rx="3" stroke="#0f172a" stroke-width="1.2" opacity=".55"/><rect x="2.5" y="2.5" width="13" height="7" rx="1.6" fill="#0f172a"/><rect x="20" y="4" width="1.6" height="4" rx="1" fill="#0f172a" opacity=".55"/></svg>
+        </div>
+      </div>
+
+      <div class="stage">
+
+        <!-- ===================== HOME ===================== -->
+        <div id="screen-home" class="scroll" style="padding:6px 22px 30px;">
+          <div style="margin:6px 0 22px;">
+            <div style="font-size:12px;font-weight:600;color:#2563eb;letter-spacing:1.5px;text-transform:uppercase;">Puzzle Locator</div>
+            <div style="font-size:27px;font-weight:800;color:#0f172a;letter-spacing:-.5px;margin-top:2px;">我的拼圖</div>
+          </div>
+          <div style="font-size:13px;font-weight:700;color:#94a3b8;letter-spacing:.5px;margin:14px 0 12px 2px;">專案</div>
+          <div id="project-list" style="display:flex;flex-direction:column;gap:14px;"></div>
+          <div id="btn-start-new" data-tap style="margin-top:16px;border:1.5px dashed #c3cbd9;border-radius:20px;padding:18px;display:flex;align-items:center;justify-content:center;gap:9px;color:#2563eb;font-weight:700;font-size:15px;cursor:pointer;background:rgba(37,99,235,.03);">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#2563eb" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
+            新增拼圖專案
+          </div>
+        </div>
+
+        <!-- ===================== SETUP ===================== -->
+        <div id="screen-setup" class="scroll hidden" style="padding:4px 22px 30px;">
+          <div style="display:flex;align-items:center;gap:12px;margin:4px 0 20px;">
+            <div data-tap class="js-go-home" style="width:40px;height:40px;border-radius:12px;background:#fff;border:1px solid #e8ebf2;display:flex;align-items:center;justify-content:center;cursor:pointer;">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#475569" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m15 18-6-6 6-6"/></svg>
+            </div>
+            <div style="font-size:21px;font-weight:800;color:#0f172a;">新增專案</div>
+          </div>
+
+          <div style="font-size:13px;font-weight:700;color:#334155;margin:0 0 8px 2px;">專案名稱</div>
+          <input id="setup-name" placeholder="例如：星空 1000 片" style="width:100%;font-size:15px;font-weight:600;color:#0f172a;padding:14px 16px;border:1px solid #e2e6ee;border-radius:14px;background:#fff;outline:none;margin-bottom:20px;">
+
+          <div style="font-size:13px;font-weight:700;color:#334155;margin:0 0 8px 2px;">拼圖規格</div>
+          <div id="preset-list" style="display:flex;flex-direction:column;gap:10px;margin-bottom:20px;"></div>
+
+          <div style="display:flex;gap:10px;margin-bottom:20px;">
+            <div style="flex:1;background:#fff;border:1px solid #e8ebf2;border-radius:14px;padding:10px 12px;">
+              <div style="font-size:11px;color:#94a3b8;font-weight:600;margin-bottom:4px;">列數</div>
+              <input id="setup-rows" type="number" min="1" value="40" style="width:100%;font-size:20px;font-weight:800;color:#0f172a;border:none;outline:none;background:transparent;padding:0;">
+            </div>
+            <div style="flex:1;background:#fff;border:1px solid #e8ebf2;border-radius:14px;padding:10px 12px;">
+              <div style="font-size:11px;color:#94a3b8;font-weight:600;margin-bottom:4px;">行數</div>
+              <input id="setup-cols" type="number" min="1" value="25" style="width:100%;font-size:20px;font-weight:800;color:#0f172a;border:none;outline:none;background:transparent;padding:0;">
+            </div>
+          </div>
+
+          <div style="font-size:13px;font-weight:700;color:#334155;margin:0 0 8px 2px;">完成圖（盒面照片）</div>
+          <div id="upload-box" data-tap style="position:relative;width:100%;aspect-ratio:16/10;border-radius:16px;overflow:hidden;border:1.5px dashed #c3cbd9;display:flex;align-items:center;justify-content:center;cursor:pointer;margin-bottom:26px;background:#fff;">
+            <div id="upload-empty" style="display:flex;flex-direction:column;align-items:center;gap:8px;color:#94a3b8;">
+              <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="#94a3b8" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="3"/><circle cx="9" cy="9" r="2"/><path d="m21 15-5-5L5 21"/></svg>
+              <span style="font-size:13px;font-weight:600;">點擊上傳完成圖</span>
+            </div>
+            <div id="upload-filled" class="hidden">
+              <div class="art"><div class="sky"></div><div class="sun"></div><div class="hills"></div><div class="ground"></div></div>
+              <div style="position:absolute;left:10px;bottom:10px;background:rgba(15,23,42,.6);backdrop-filter:blur(4px);color:#fff;font-size:11px;font-weight:600;padding:5px 10px;border-radius:8px;">✓ 已上傳完成圖</div>
+            </div>
+          </div>
+
+          <div id="btn-create" data-tap style="width:100%;padding:16px;border-radius:16px;background:linear-gradient(180deg,#2f6bf3,#2152d6);color:#fff;font-size:16px;font-weight:700;text-align:center;cursor:pointer;box-shadow:0 14px 28px -12px rgba(37,99,235,.6);">建立專案</div>
+        </div>
+
+        <!-- ===================== APP (tabs) ===================== -->
+        <div id="screen-app" class="hidden" style="flex:1;min-height:0;display:flex;flex-direction:column;">
+          <!-- app header -->
+          <div style="flex:none;padding:2px 20px 12px;display:flex;align-items:center;gap:12px;">
+            <div data-tap class="js-go-home" style="width:38px;height:38px;border-radius:12px;background:#fff;border:1px solid #e8ebf2;display:flex;align-items:center;justify-content:center;cursor:pointer;">
+              <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="#475569" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m15 18-6-6 6-6"/></svg>
+            </div>
+            <div style="flex:1;min-width:0;">
+              <div id="app-title" style="font-size:17px;font-weight:800;color:#0f172a;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">星空 1000 片</div>
+              <div id="app-subtitle" style="font-size:12px;color:#64748b;font-weight:500;">1000 片 · 40×25 · 已定位 347 片</div>
+            </div>
+          </div>
+
+          <div class="scroll">
+
+            <!-- ----- CAPTURE TAB ----- -->
+            <div id="tab-capture" style="padding:0 20px 24px;">
+
+              <!-- phase: aim -->
+              <div id="phase-aim" class="fadeUp">
+                <div style="position:relative;width:100%;aspect-ratio:3/4;border-radius:22px;overflow:hidden;background:linear-gradient(160deg,#cdc7bd,#ded9cf 50%,#c7c1b6);">
+                  <div style="position:absolute;left:50%;top:50%;transform:translate(-50%,-50%) rotate(-6deg);width:52%;aspect-ratio:1;border-radius:18px;background:linear-gradient(150deg,#1e3a8a,#be185d 55%,#f97316);box-shadow:0 18px 40px -16px rgba(0,0,0,.5);"></div>
+                  <div style="position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:64%;aspect-ratio:1;border:2.5px solid rgba(37,99,235,.95);border-radius:16px;box-shadow:0 0 0 9999px rgba(15,23,42,.42);"></div>
+                  <div class="frame-corner" style="left:calc(50% - 32%);top:calc(50% - 32%);border-top:3px solid #fff;border-left:3px solid #fff;border-radius:4px 0 0 0;"></div>
+                  <div class="frame-corner" style="left:calc(50% + 32% - 22px);top:calc(50% - 32%);border-top:3px solid #fff;border-right:3px solid #fff;border-radius:0 4px 0 0;"></div>
+                  <div class="frame-corner" style="left:calc(50% - 32%);top:calc(50% + 32% - 22px);border-bottom:3px solid #fff;border-left:3px solid #fff;border-radius:0 0 0 4px;"></div>
+                  <div class="frame-corner" style="left:calc(50% + 32% - 22px);top:calc(50% + 32% - 22px);border-bottom:3px solid #fff;border-right:3px solid #fff;border-radius:0 0 4px 0;"></div>
+                  <div class="pill-info" style="left:50%;top:14px;transform:translateX(-50%);display:flex;align-items:center;gap:6px;">
+                    <span style="width:7px;height:7px;border-radius:50%;background:#34d399;animation:blink 1.4s infinite;"></span>已偵測到單片 · 對齊框內
+                  </div>
+                </div>
+                <div style="display:flex;align-items:center;justify-content:space-between;margin:18px 4px 0;">
+                  <div style="font-size:13px;color:#64748b;font-weight:600;display:flex;align-items:center;gap:7px;">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#16a34a" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>自動裁切已開啟
+                  </div>
+                  <div style="font-size:13px;color:#94a3b8;font-weight:600;">建議框 ≈ 5cm</div>
+                </div>
+                <div style="display:flex;align-items:center;justify-content:center;margin-top:20px;">
+                  <div id="btn-capture" data-tap style="width:74px;height:74px;border-radius:50%;background:#fff;border:5px solid #2563eb;cursor:pointer;display:flex;align-items:center;justify-content:center;box-shadow:0 10px 24px -10px rgba(37,99,235,.55);">
+                    <div style="width:54px;height:54px;border-radius:50%;background:linear-gradient(180deg,#3b82f6,#2563eb);"></div>
+                  </div>
+                </div>
+              </div>
+
+              <!-- phase: cropped -->
+              <div id="phase-cropped" class="hidden fadeUp">
+                <div id="crop-stage" style="position:relative;width:100%;aspect-ratio:3/4;border-radius:22px;overflow:hidden;background:linear-gradient(160deg,#cdc7bd,#ded9cf 50%,#c7c1b6);touch-action:none;cursor:grab;">
+                  <div id="crop-graphic" style="position:absolute;left:50%;top:50%;width:48%;aspect-ratio:1;transform:translate(-50%,-50%);transform-origin:center;will-change:transform;">
+                    <div style="position:absolute;inset:0;border-radius:14px;background:linear-gradient(150deg,#1e3a8a,#be185d 55%,#f97316);box-shadow:0 14px 34px -14px rgba(0,0,0,.55);"></div>
+                    <div style="position:absolute;left:50%;top:-12%;transform:translateX(-50%);width:30%;aspect-ratio:1;border-radius:50%;background:linear-gradient(150deg,#1e3a8a,#3730a3);"></div>
+                    <div style="position:absolute;left:-12%;top:50%;transform:translateY(-50%);width:30%;aspect-ratio:1;border-radius:50%;background:linear-gradient(160deg,#cdc7bd,#ded9cf);"></div>
+                  </div>
+                  <div style="position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:60%;aspect-ratio:1;border:2.5px solid rgba(37,99,235,.95);border-radius:16px;box-shadow:0 0 0 9999px rgba(15,23,42,.45);pointer-events:none;"></div>
+                  <div class="frame-corner" style="left:calc(50% - 30%);top:calc(50% - 30%);border-top:3px solid #fff;border-left:3px solid #fff;border-radius:4px 0 0 0;pointer-events:none;"></div>
+                  <div class="frame-corner" style="left:calc(50% + 30% - 22px);top:calc(50% - 30%);border-top:3px solid #fff;border-right:3px solid #fff;border-radius:0 4px 0 0;pointer-events:none;"></div>
+                  <div class="frame-corner" style="left:calc(50% - 30%);top:calc(50% + 30% - 22px);border-bottom:3px solid #fff;border-left:3px solid #fff;border-radius:0 0 0 4px;pointer-events:none;"></div>
+                  <div class="frame-corner" style="left:calc(50% + 30% - 22px);top:calc(50% + 30% - 22px);border-bottom:3px solid #fff;border-right:3px solid #fff;border-radius:0 0 4px 0;pointer-events:none;"></div>
+                  <div class="pill-info" style="left:50%;bottom:14px;transform:translateX(-50%);pointer-events:none;">拖曳移動 · 縮放滑桿調整，將單片對進框內</div>
+                </div>
+                <div style="display:flex;align-items:center;gap:12px;margin:16px 4px 0;">
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#94a3b8" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3-3M8 11h6"/></svg>
+                  <input id="crop-zoom" type="range" min="1" max="2.6" step="0.01" value="1" style="flex:1;">
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#94a3b8" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3-3M11 8v6M8 11h6"/></svg>
+                  <div id="btn-reset-crop" data-tap style="font-size:12px;font-weight:700;color:#2563eb;cursor:pointer;white-space:nowrap;">重設</div>
+                </div>
+                <div style="display:flex;gap:12px;margin-top:16px;">
+                  <div id="btn-retake" data-tap style="flex:1;padding:15px;border-radius:14px;background:#fff;border:1px solid #e2e6ee;color:#475569;font-weight:700;font-size:15px;text-align:center;cursor:pointer;">重拍</div>
+                  <div id="btn-recognize" data-tap style="flex:2;padding:15px;border-radius:14px;background:linear-gradient(180deg,#2f6bf3,#2152d6);color:#fff;font-weight:700;font-size:15px;text-align:center;cursor:pointer;box-shadow:0 12px 24px -12px rgba(37,99,235,.6);">辨識位置</div>
+                </div>
+              </div>
+
+              <!-- phase: recognizing -->
+              <div id="phase-recognizing" class="hidden fadeUp">
+                <div style="position:relative;width:100%;aspect-ratio:3/4;border-radius:22px;overflow:hidden;background:#0f172a;display:flex;align-items:center;justify-content:center;">
+                  <div style="position:relative;width:62%;aspect-ratio:1;border-radius:16px;overflow:hidden;background:linear-gradient(150deg,#1e3a8a,#be185d 55%,#f97316);">
+                    <div style="position:absolute;left:0;right:0;height:3px;background:linear-gradient(90deg,transparent,#67e8f9,transparent);box-shadow:0 0 14px 3px rgba(103,232,249,.7);animation:scanline 1.2s ease-in-out infinite alternate;"></div>
+                    <div style="position:absolute;inset:0;background:repeating-linear-gradient(0deg,rgba(255,255,255,.06) 0 1px,transparent 1px 14px),repeating-linear-gradient(90deg,rgba(255,255,255,.06) 0 1px,transparent 1px 14px);"></div>
+                  </div>
+                  <div style="position:absolute;left:50%;bottom:30px;transform:translateX(-50%);display:flex;flex-direction:column;align-items:center;gap:12px;">
+                    <div style="width:34px;height:34px;border-radius:50%;border:3px solid rgba(255,255,255,.2);border-top-color:#67e8f9;animation:spin .8s linear infinite;"></div>
+                    <div style="color:#e2e8f0;font-size:14px;font-weight:600;">比對完成圖中…</div>
+                  </div>
+                </div>
+              </div>
+
+              <!-- phase: result -->
+              <div id="phase-result" class="hidden fadeUp">
+                <div style="display:flex;align-items:center;gap:10px;background:#ecfdf5;border:1px solid #bbf7d0;border-radius:14px;padding:12px 14px;margin-bottom:14px;">
+                  <div style="width:36px;height:36px;border-radius:50%;background:#16a34a;display:flex;align-items:center;justify-content:center;flex:none;">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>
+                  </div>
+                  <div style="flex:1;">
+                    <div style="font-size:15px;font-weight:800;color:#14532d;">找到位置了！</div>
+                    <div style="font-size:12px;color:#16a34a;font-weight:600;">符合度 <span id="loc-conf">92</span>% · 第 <span id="loc-row">14</span> 列 · 第 <span id="loc-col">9</span> 行</div>
+                  </div>
+                  <div id="loc-ref" style="background:#16a34a;color:#fff;font-size:12px;font-weight:800;padding:5px 11px;border-radius:9px;letter-spacing:.5px;">R14C9</div>
+                </div>
+
+                <!-- style switcher -->
+                <div style="display:flex;background:#eef1f6;border-radius:13px;padding:4px;gap:4px;margin-bottom:14px;">
+                  <div id="btn-style-a" data-tap style="flex:1;text-align:center;font-size:12.5px;font-weight:700;padding:9px 4px;border-radius:10px;cursor:pointer;">聚焦放大</div>
+                  <div id="btn-style-b" data-tap style="flex:1;text-align:center;font-size:12.5px;font-weight:700;padding:9px 4px;border-radius:10px;cursor:pointer;">全圖定位</div>
+                </div>
+
+                <!-- STYLE A: zoom -->
+                <div id="style-a" style="position:relative;width:100%;aspect-ratio:16/10;border-radius:18px;overflow:hidden;background:#0f172a;border:1px solid #e2e6ee;">
+                  <div id="zoom-art" style="position:absolute;">
+                    <div class="art"><div class="sky"></div><div class="sun"></div><div class="hills"></div><div class="ground"></div></div>
+                  </div>
+                  <div id="zoom-cell" style="position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);border:3px solid #fff;border-radius:6px;box-shadow:0 0 0 3px rgba(37,99,235,.9),0 0 26px 6px rgba(37,99,235,.5);animation:locpulse 1.6s infinite;"></div>
+                  <div id="zoom-ring" style="position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);border:2px solid rgba(255,255,255,.45);border-radius:50%;animation:ringgrow 1.8s infinite;"></div>
+                  <div class="pill-info" style="left:10px;top:10px;">放大 3.4× · 周邊參考</div>
+                </div>
+
+                <!-- STYLE B: full map -->
+                <div id="style-b" class="hidden" style="position:relative;width:100%;aspect-ratio:16/10;border-radius:18px;overflow:hidden;background:#0f172a;border:1px solid #e2e6ee;">
+                  <div class="art"><div class="sky"></div><div class="sun"></div><div class="hills"></div><div class="ground"></div></div>
+                  <div id="styleb-grid" style="position:absolute;inset:0;opacity:.5;"></div>
+                  <div id="styleb-loc" style="position:absolute;background:rgba(37,99,235,.45);border:2px solid #fff;box-shadow:0 0 0 2px #2563eb,0 0 22px 5px rgba(37,99,235,.7);animation:locpulse 1.6s infinite;"></div>
+                </div>
+
+                <div id="btn-mark" data-tap style="display:flex;align-items:center;gap:11px;margin-top:16px;padding:13px 14px;border-radius:14px;border:1px solid #e2e6ee;background:#fff;cursor:pointer;">
+                  <div id="mark-box" style="width:22px;height:22px;border-radius:7px;flex:none;display:flex;align-items:center;justify-content:center;border:2px solid #16a34a;background:#16a34a;">
+                    <svg id="mark-check" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>
+                  </div>
+                  <div style="flex:1;">
+                    <div style="font-size:14px;font-weight:700;color:#0f172a;">標記為已確認位置</div>
+                    <div style="font-size:12px;color:#94a3b8;margin-top:1px;">勾選後此片會標進全圖；不勾選則僅儲存紀錄</div>
+                  </div>
+                </div>
+                <div style="display:flex;gap:12px;margin-top:12px;">
+                  <div id="btn-re-recognize" data-tap style="flex:1;padding:15px;border-radius:14px;background:#fff;border:1px solid #e2e6ee;color:#475569;font-weight:700;font-size:15px;text-align:center;cursor:pointer;">重新辨識</div>
+                  <div id="btn-confirm" data-tap style="flex:2;padding:15px;border-radius:14px;background:linear-gradient(180deg,#16a34a,#15803d);color:#fff;font-weight:700;font-size:15px;text-align:center;cursor:pointer;box-shadow:0 12px 24px -12px rgba(22,163,74,.6);">確認儲存</div>
+                </div>
+              </div>
+
+            </div>
+
+            <!-- ----- MAP TAB ----- -->
+            <div id="tab-map" class="hidden" style="padding:0 20px 24px;">
+              <div style="position:relative;width:100%;aspect-ratio:16/10;border-radius:18px;overflow:hidden;border:1px solid #e2e6ee;background:#0f172a;">
+                <div class="art"><div class="sky"></div><div class="sun"></div><div class="hills"></div><div class="ground"></div></div>
+                <div id="map-cells" style="position:absolute;inset:0;"></div>
+                <div id="map-grid" style="position:absolute;inset:0;opacity:.4;"></div>
+                <div id="map-loc" style="position:absolute;background:rgba(37,99,235,.5);border:2px solid #fff;box-shadow:0 0 0 2px #2563eb,0 0 22px 5px rgba(37,99,235,.7);animation:locpulse 1.6s infinite;"></div>
+              </div>
+              <div style="display:flex;align-items:center;gap:16px;margin:14px 4px 0;flex-wrap:wrap;">
+                <div style="display:flex;align-items:center;gap:7px;font-size:12px;color:#475569;font-weight:600;"><span style="width:13px;height:13px;border-radius:3px;background:rgba(22,163,74,.6);border:1px solid #16a34a;"></span>已定位</div>
+                <div style="display:flex;align-items:center;gap:7px;font-size:12px;color:#475569;font-weight:600;"><span style="width:13px;height:13px;border-radius:3px;background:rgba(37,99,235,.6);border:1px solid #2563eb;"></span>最新一片</div>
+                <div style="display:flex;align-items:center;gap:7px;font-size:12px;color:#475569;font-weight:600;"><span style="width:13px;height:13px;border-radius:3px;background:transparent;border:1px solid #cbd5e1;"></span>未拼</div>
+              </div>
+              <div style="margin-top:16px;background:#fff;border:1px solid #e8ebf2;border-radius:16px;padding:16px;">
+                <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
+                  <span style="font-size:14px;font-weight:700;color:#0f172a;">完成進度</span>
+                  <span class="js-pct" style="font-size:14px;font-weight:800;color:#2563eb;">35%</span>
+                </div>
+                <div style="height:10px;border-radius:8px;background:#eef1f6;overflow:hidden;">
+                  <div class="js-pct-bar" style="height:100%;width:35%;border-radius:8px;background:linear-gradient(90deg,#3b82f6,#2563eb);"></div>
+                </div>
+                <div class="js-progress-label" style="font-size:12px;color:#64748b;margin-top:9px;font-weight:500;">347 / 1000 片已定位 · 剩餘 653 片</div>
+              </div>
+            </div>
+
+            <!-- ----- LIST / PROGRESS TAB ----- -->
+            <div id="tab-list" class="hidden" style="padding:0 20px 24px;">
+              <div style="display:flex;gap:10px;margin-bottom:18px;">
+                <div style="flex:1;background:#fff;border:1px solid #e8ebf2;border-radius:16px;padding:15px;">
+                  <div class="js-confirmed" style="font-size:26px;font-weight:800;color:#16a34a;">347</div>
+                  <div style="font-size:12px;color:#64748b;font-weight:500;margin-top:2px;">已定位</div>
+                </div>
+                <div style="flex:1;background:#fff;border:1px solid #e8ebf2;border-radius:16px;padding:15px;">
+                  <div class="js-remaining" style="font-size:26px;font-weight:800;color:#0f172a;">653</div>
+                  <div style="font-size:12px;color:#64748b;font-weight:500;margin-top:2px;">待辨識</div>
+                </div>
+                <div style="flex:1;background:#fff;border:1px solid #e8ebf2;border-radius:16px;padding:15px;">
+                  <div style="font-size:26px;font-weight:800;color:#2563eb;"><span class="js-pct-num">35</span><span style="font-size:15px;">%</span></div>
+                  <div style="font-size:12px;color:#64748b;font-weight:500;margin-top:2px;">完成度</div>
+                </div>
+              </div>
+              <div style="font-size:13px;font-weight:700;color:#94a3b8;letter-spacing:.5px;margin:0 0 10px 2px;">最近已確認</div>
+              <div id="recent-list" style="display:flex;flex-direction:column;gap:10px;"></div>
+            </div>
+
+            <!-- ----- SETTINGS TAB ----- -->
+            <div id="tab-settings" class="hidden" style="padding:0 20px 24px;">
+              <div style="font-size:13px;font-weight:700;color:#94a3b8;letter-spacing:.5px;margin:0 0 10px 2px;">拍照輔助</div>
+              <div id="toggle-list" style="background:#fff;border:1px solid #e8ebf2;border-radius:16px;overflow:hidden;margin-bottom:20px;"></div>
+
+              <div style="font-size:13px;font-weight:700;color:#94a3b8;letter-spacing:.5px;margin:0 0 10px 2px;">建議拍攝框大小</div>
+              <div style="background:#fff;border:1px solid #e8ebf2;border-radius:16px;padding:16px;margin-bottom:20px;">
+                <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
+                  <span style="font-size:14px;font-weight:700;color:#0f172a;">自動建議</span>
+                  <span style="font-size:13px;font-weight:700;color:#2563eb;background:#eff6ff;padding:4px 11px;border-radius:9px;">依片數計算 ≈ 5cm</span>
+                </div>
+                <div id="framemode-list" style="display:flex;gap:8px;"></div>
+              </div>
+
+              <div style="background:#fff;border:1px solid #e8ebf2;border-radius:16px;overflow:hidden;">
+                <div style="display:flex;align-items:center;justify-content:space-between;padding:15px 16px;border-bottom:1px solid #f1f3f8;">
+                  <span style="font-size:14.5px;font-weight:600;color:#0f172a;">完成圖</span>
+                  <span style="font-size:13px;color:#94a3b8;">已上傳</span>
+                </div>
+                <div data-tap class="js-go-home" style="display:flex;align-items:center;justify-content:space-between;padding:15px 16px;cursor:pointer;">
+                  <span style="font-size:14.5px;font-weight:600;color:#dc2626;">刪除專案</span>
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#cbd5e1" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg>
+                </div>
+              </div>
+            </div>
+
+          </div>
+
+          <!-- bottom nav -->
+          <div id="bottom-nav" style="flex:none;display:flex;padding:8px 12px 26px;background:rgba(255,255,255,.92);backdrop-filter:blur(12px);border-top:1px solid #eef1f6;">
+            <div data-tap class="nav-item" data-tab="capture" style="flex:1;display:flex;flex-direction:column;align-items:center;gap:4px;cursor:pointer;">
+              <svg width="23" height="23" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3Z"/><circle cx="12" cy="13" r="3.5"/></svg>
+              <span style="font-size:10.5px;font-weight:700;">拍照</span>
+            </div>
+            <div data-tap class="nav-item" data-tab="map" style="flex:1;display:flex;flex-direction:column;align-items:center;gap:4px;cursor:pointer;">
+              <svg width="23" height="23" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 3v18M15 3v18M3 9h18M3 15h18"/></svg>
+              <span style="font-size:10.5px;font-weight:700;">全圖</span>
+            </div>
+            <div data-tap class="nav-item" data-tab="list" style="flex:1;display:flex;flex-direction:column;align-items:center;gap:4px;cursor:pointer;">
+              <svg width="23" height="23" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6h11M9 12h11M9 18h11"/><path d="M4 6h.01M4 12h.01M4 18h.01"/></svg>
+              <span style="font-size:10.5px;font-weight:700;">進度</span>
+            </div>
+            <div data-tap class="nav-item" data-tab="settings" style="flex:1;display:flex;flex-direction:column;align-items:center;gap:4px;cursor:pointer;">
+              <svg width="23" height="23" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1Z"/></svg>
+              <span style="font-size:10.5px;font-weight:700;">設定</span>
+            </div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+  </div>
+
+<script>
+/* ----------------------------------------------------------------------
+   Puzzle Locator — interactive prototype
+   Faithful reproduction of the Claude Design (Puzzle Locator.dc.html).
+   Pure vanilla JS, mock data, no backend.
+---------------------------------------------------------------------- */
+const $ = (s, r=document) => r.querySelector(s);
+const $$ = (s, r=document) => Array.from(r.querySelectorAll(s));
+
+/* ---------- mock data ---------- */
+const PROJECTS = [
+  { name:"星空 1000 片", rows:40, cols:25, pieces:1000, confirmed:347,
+    thumb:"linear-gradient(150deg,#1e3a8a,#5b21b6 45%,#be185d 75%,#f97316)" },
+  { name:"梵谷・星夜", rows:30, cols:40, pieces:1200, confirmed:1080,
+    thumb:"linear-gradient(160deg,#0c4a6e,#1d4ed8 50%,#fbbf24)" },
+  { name:"富士山櫻花", rows:20, cols:25, pieces:500, confirmed:62,
+    thumb:"linear-gradient(160deg,#fbcfe8,#f472b6 45%,#0ea5e9)" },
+];
+
+const PRESETS = [
+  { title:"300 片",  sub:"20 × 15", rows:15, cols:20 },
+  { title:"500 片",  sub:"25 × 20", rows:20, cols:25 },
+  { title:"1000 片", sub:"40 × 25", rows:40, cols:25 },
+];
+
+const TOGGLES = [
+  { title:"自動裁切",   sub:"偵測單片邊界並自動裁切",   on:true  },
+  { title:"格線輔助",   sub:"拍攝時顯示對齊參考格線",   on:true  },
+  { title:"辨識完成震動", sub:"找到位置時以震動提示",     on:false },
+];
+
+const FRAME_MODES = [ {label:"小"}, {label:"建議"}, {label:"大"} ];
+
+const RECENT = [
+  { row:14, col:9,  time:"剛剛",     conf:92, ref:"R14C9",  swatch:"linear-gradient(150deg,#1e3a8a,#be185d 60%,#f97316)", checked:true },
+  { row:12, col:18, time:"3 分鐘前", conf:88, ref:"R12C18", swatch:"linear-gradient(150deg,#5b21b6,#be185d)",            checked:true },
+  { row:9,  col:4,  time:"8 分鐘前", conf:95, ref:"R9C4",   swatch:"linear-gradient(150deg,#f97316,#fbbf24)",            checked:true },
+  { row:7,  col:22, time:"15 分鐘前",conf:79, ref:"R7C22",  swatch:"linear-gradient(150deg,#0ea5e9,#1e3a8a)",            checked:false },
+  { row:3,  col:11, time:"32 分鐘前",conf:90, ref:"R3C11",  swatch:"linear-gradient(150deg,#312e81,#6d28d9)",            checked:true },
+];
+
+/* ---------- runtime state ---------- */
+const state = {
+  screen:"home",          // home | setup | app
+  tab:"capture",          // capture | map | list | settings
+  phase:"aim",            // aim | cropped | recognizing | result
+  resultStyle:"A",        // A | B
+  markConfirmed:true,
+  project:PROJECTS[0],
+  presetIndex:2,
+  uploaded:false,
+  frameModeIndex:1,
+  crop:{ zoom:1, x:0, y:0, dragging:false, lastX:0, lastY:0 },
+  // latest located piece
+  loc:{ row:14, col:9, conf:92 },
+};
+
+/* ---------- geometry helpers ---------- */
+function gridImage() {
+  return "linear-gradient(rgba(255,255,255,.55) 1px,transparent 1px)," +
+         "linear-gradient(90deg,rgba(255,255,255,.55) 1px,transparent 1px)";
+}
+function gridSize(p) { return (100/p.cols)+"% "+(100/p.rows)+"%"; }
+function cellRect(p, row, col) {
+  return { l:(col-1)/p.cols*100, t:(row-1)/p.rows*100, w:100/p.cols, h:100/p.rows };
+}
+
+/* ---------- rendering ---------- */
+function renderScreens() {
+  $("#screen-home").classList.toggle("hidden", state.screen!=="home");
+  $("#screen-setup").classList.toggle("hidden", state.screen!=="setup");
+  $("#screen-app").classList.toggle("hidden", state.screen!=="app");
+}
+
+function renderProjects() {
+  const host = $("#project-list");
+  host.innerHTML = "";
+  PROJECTS.forEach((p, i) => {
+    const pct = Math.round(p.confirmed/p.pieces*100);
+    const el = document.createElement("div");
+    el.dataset.tap = "";
+    el.style.cssText = "background:#fff;border:1px solid #e8ebf2;border-radius:20px;padding:13px;display:flex;gap:14px;align-items:center;box-shadow:0 8px 24px -18px rgba(15,23,42,.4);cursor:pointer;";
+    el.innerHTML =
+      '<div style="width:74px;height:74px;border-radius:14px;flex:none;overflow:hidden;position:relative;background:'+p.thumb+';"></div>'+
+      '<div style="flex:1;min-width:0;">'+
+        '<div style="font-size:16px;font-weight:700;color:#0f172a;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">'+p.name+'</div>'+
+        '<div style="font-size:12px;color:#64748b;margin:3px 0 9px;">'+p.pieces+' 片 · '+p.rows+'×'+p.cols+'</div>'+
+        '<div style="height:7px;border-radius:6px;background:#eef1f6;overflow:hidden;">'+
+          '<div style="height:100%;width:'+pct+'%;border-radius:6px;background:linear-gradient(90deg,#3b82f6,#2563eb);"></div>'+
+        '</div>'+
+        '<div style="font-size:11px;color:#94a3b8;margin-top:5px;font-weight:600;">已定位 '+p.confirmed+' / '+p.pieces+' 片 · '+pct+'%</div>'+
+      '</div>';
+    el.addEventListener("click", () => openProject(i));
+    host.appendChild(el);
+  });
+}
+
+function renderPresets() {
+  const host = $("#preset-list");
+  host.innerHTML = "";
+  PRESETS.forEach((p, i) => {
+    const active = i === state.presetIndex;
+    const el = document.createElement("div");
+    el.dataset.tap = "";
+    el.style.cssText = "display:flex;align-items:center;justify-content:space-between;padding:14px 16px;border-radius:14px;cursor:pointer;border:"+
+      (active?"1.5px solid #2563eb":"1px solid #e8ebf2")+";background:"+(active?"#eff6ff":"#fff")+";";
+    el.innerHTML =
+      '<div>'+
+        '<div style="font-size:16px;font-weight:700;color:#0f172a;">'+p.title+'</div>'+
+        '<div style="font-size:12px;color:#64748b;margin-top:2px;">'+p.sub+'</div>'+
+      '</div>'+
+      '<div style="width:22px;height:22px;border-radius:50%;display:flex;align-items:center;justify-content:center;border:'+
+        (active?"none":"2px solid #cbd5e1")+';background:'+(active?"#2563eb":"transparent")+';">'+
+        (active?'<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>':'')+
+      '</div>';
+    el.addEventListener("click", () => {
+      state.presetIndex = i;
+      $("#setup-rows").value = p.rows;
+      $("#setup-cols").value = p.cols;
+      renderPresets();
+    });
+    host.appendChild(el);
+  });
+}
+
+function renderRecent() {
+  const host = $("#recent-list");
+  host.innerHTML = "";
+  RECENT.forEach((r, i) => {
+    const el = document.createElement("div");
+    el.style.cssText = "display:flex;align-items:center;gap:13px;background:#fff;border:1px solid #e8ebf2;border-radius:14px;padding:11px 13px;";
+    el.innerHTML =
+      '<div style="width:42px;height:42px;border-radius:11px;flex:none;background:'+r.swatch+';box-shadow:inset 0 0 0 1px rgba(0,0,0,.08);"></div>'+
+      '<div style="flex:1;">'+
+        '<div style="font-size:14px;font-weight:700;color:#0f172a;">第 '+r.row+' 列 · 第 '+r.col+' 行</div>'+
+        '<div style="font-size:12px;color:#94a3b8;font-weight:500;margin-top:1px;">'+r.time+' · 符合度 '+r.conf+'%</div>'+
+      '</div>'+
+      '<div style="background:#eff6ff;color:#2563eb;font-size:11px;font-weight:800;padding:5px 10px;border-radius:9px;letter-spacing:.5px;">'+r.ref+'</div>'+
+      '<div class="cb" style="width:24px;height:24px;border-radius:7px;flex:none;display:flex;align-items:center;justify-content:center;cursor:pointer;border:'+
+        (r.checked?"none":"2px solid #cbd5e1")+';background:'+(r.checked?"#16a34a":"transparent")+';">'+
+        (r.checked?'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>':'')+
+      '</div>';
+    el.querySelector(".cb").dataset.tap = "";
+    el.querySelector(".cb").addEventListener("click", () => { r.checked = !r.checked; renderRecent(); });
+    host.appendChild(el);
+  });
+}
+
+function renderToggles() {
+  const host = $("#toggle-list");
+  host.innerHTML = "";
+  TOGGLES.forEach((t, i) => {
+    const last = i === TOGGLES.length-1;
+    const el = document.createElement("div");
+    el.dataset.tap = "";
+    el.style.cssText = "display:flex;align-items:center;justify-content:space-between;padding:15px 16px;cursor:pointer;border-bottom:"+
+      (last?"none":"1px solid #f1f3f8")+";";
+    el.innerHTML =
+      '<div style="flex:1;padding-right:12px;">'+
+        '<div style="font-size:14.5px;font-weight:700;color:#0f172a;">'+t.title+'</div>'+
+        '<div style="font-size:12px;color:#94a3b8;margin-top:2px;">'+t.sub+'</div>'+
+      '</div>'+
+      '<div style="width:46px;height:28px;border-radius:16px;flex:none;background:'+(t.on?"#2563eb":"#d7dce6")+';position:relative;transition:background .2s;">'+
+        '<div style="position:absolute;top:3px;left:'+(t.on?"21px":"3px")+';width:22px;height:22px;border-radius:50%;background:#fff;box-shadow:0 2px 5px rgba(0,0,0,.25);transition:left .2s;"></div>'+
+      '</div>';
+    el.addEventListener("click", () => { t.on = !t.on; renderToggles(); });
+    host.appendChild(el);
+  });
+}
+
+function renderFrameModes() {
+  const host = $("#framemode-list");
+  host.innerHTML = "";
+  FRAME_MODES.forEach((f, i) => {
+    const active = i === state.frameModeIndex;
+    const el = document.createElement("div");
+    el.dataset.tap = "";
+    el.style.cssText = "flex:1;text-align:center;font-size:13px;font-weight:700;padding:11px 4px;border-radius:11px;cursor:pointer;border:"+
+      (active?"none":"1px solid #e2e6ee")+";background:"+(active?"#2563eb":"#fff")+";color:"+(active?"#fff":"#475569")+";";
+    el.textContent = f.label;
+    el.addEventListener("click", () => { state.frameModeIndex = i; renderFrameModes(); });
+    host.appendChild(el);
+  });
+}
+
+/* fill the puzzle map with `confirmed` cells (reading order) */
+function renderMapCells() {
+  const p = state.project;
+  const host = $("#map-cells");
+  host.innerHTML = "";
+  const w = 100/p.cols, h = 100/p.rows;
+  for (let n = 0; n < p.confirmed; n++) {
+    const row = Math.floor(n / p.cols), col = n % p.cols;
+    const c = document.createElement("div");
+    c.style.cssText = "position:absolute;left:"+(col*w)+"%;top:"+(row*h)+"%;width:"+w+"%;height:"+h+
+      "%;background:rgba(22,163,74,.5);box-shadow:inset 0 0 0 .5px rgba(22,163,74,.8);";
+    host.appendChild(c);
+  }
+}
+
+function renderAppHeader() {
+  const p = state.project;
+  $("#app-title").textContent = p.name;
+  $("#app-subtitle").textContent = p.pieces+" 片 · "+p.rows+"×"+p.cols+" · 已定位 "+p.confirmed+" 片";
+  const pct = Math.round(p.confirmed/p.pieces*100);
+  const remaining = p.pieces - p.confirmed;
+  $$(".js-pct").forEach(e => e.textContent = pct+"%");
+  $$(".js-pct-bar").forEach(e => e.style.width = pct+"%");
+  $$(".js-pct-num").forEach(e => e.textContent = pct);
+  $$(".js-confirmed").forEach(e => e.textContent = p.confirmed);
+  $$(".js-remaining").forEach(e => e.textContent = remaining);
+  $$(".js-progress-label").forEach(e => e.textContent = p.confirmed+" / "+p.pieces+" 片已定位 · 剩餘 "+remaining+" 片");
+}
+
+function renderTabs() {
+  $("#tab-capture").classList.toggle("hidden", state.tab!=="capture");
+  $("#tab-map").classList.toggle("hidden", state.tab!=="map");
+  $("#tab-list").classList.toggle("hidden", state.tab!=="list");
+  $("#tab-settings").classList.toggle("hidden", state.tab!=="settings");
+  // nav colors
+  $$(".nav-item").forEach(n =>
+    n.style.color = (n.dataset.tab===state.tab) ? "#2563eb" : "#94a3b8");
+  if (state.tab==="map") renderMapTab();
+}
+
+function renderPhases() {
+  $("#phase-aim").classList.toggle("hidden", state.phase!=="aim");
+  $("#phase-cropped").classList.toggle("hidden", state.phase!=="cropped");
+  $("#phase-recognizing").classList.toggle("hidden", state.phase!=="recognizing");
+  $("#phase-result").classList.toggle("hidden", state.phase!=="result");
+  if (state.phase==="cropped") applyCropTransform();
+  if (state.phase==="result") renderResult();
+}
+
+function renderCropCursor() {
+  $("#crop-stage").style.cursor = state.crop.dragging ? "grabbing" : "grab";
+}
+function applyCropTransform() {
+  const c = state.crop;
+  $("#crop-graphic").style.transform =
+    "translate(calc(-50% + "+c.x+"px), calc(-50% + "+c.y+"px)) scale("+c.zoom+")";
+}
+
+function renderResult() {
+  const p = state.project, loc = state.loc;
+  $("#loc-conf").textContent = loc.conf;
+  $("#loc-row").textContent = loc.row;
+  $("#loc-col").textContent = loc.col;
+  $("#loc-ref").textContent = "R"+loc.row+"C"+loc.col;
+
+  // style switcher visuals
+  const a = state.resultStyle==="A";
+  styleTab($("#btn-style-a"), a);
+  styleTab($("#btn-style-b"), !a);
+  $("#style-a").classList.toggle("hidden", !a);
+  $("#style-b").classList.toggle("hidden", a);
+
+  // Style A — zoomed artwork centred on the target cell
+  const zoomPct = 340;
+  const cx = (loc.col-0.5)/p.cols, cy = (loc.row-0.5)/p.rows;
+  const art = $("#zoom-art");
+  art.style.width = zoomPct+"%"; art.style.height = zoomPct+"%";
+  art.style.left = (50 - cx*zoomPct)+"%";
+  art.style.top  = (50 - cy*zoomPct)+"%";
+  const zCellW = (100/p.cols)*(zoomPct/100), zCellH = (100/p.rows)*(zoomPct/100);
+  ["#zoom-cell","#zoom-ring"].forEach(sel => {
+    $(sel).style.width = zCellW+"%"; $(sel).style.height = zCellH+"%";
+  });
+
+  // Style B — full map with grid + located cell
+  const g = $("#styleb-grid");
+  g.style.backgroundImage = gridImage();
+  g.style.backgroundSize = gridSize(p);
+  const r = cellRect(p, loc.row, loc.col);
+  const b = $("#styleb-loc");
+  b.style.left=r.l+"%"; b.style.top=r.t+"%"; b.style.width=r.w+"%"; b.style.height=r.h+"%";
+
+  // mark checkbox
+  const box = $("#mark-box");
+  box.style.border = state.markConfirmed ? "2px solid #16a34a" : "2px solid #cbd5e1";
+  box.style.background = state.markConfirmed ? "#16a34a" : "transparent";
+  $("#mark-check").style.display = state.markConfirmed ? "" : "none";
+}
+
+function styleTab(el, active) {
+  el.style.background = active ? "#fff" : "transparent";
+  el.style.color = active ? "#0f172a" : "#64748b";
+  el.style.boxShadow = active ? "0 2px 6px -2px rgba(15,23,42,.25)" : "none";
+}
+
+function renderMapTab() {
+  const p = state.project;
+  renderMapCells();
+  const g = $("#map-grid");
+  g.style.backgroundImage = gridImage();
+  g.style.backgroundSize = gridSize(p);
+  const r = cellRect(p, state.loc.row, state.loc.col);
+  const m = $("#map-loc");
+  m.style.left=r.l+"%"; m.style.top=r.t+"%"; m.style.width=r.w+"%"; m.style.height=r.h+"%";
+}
+
+function renderAll() {
+  renderScreens();
+  if (state.screen==="app") {
+    renderAppHeader();
+    renderTabs();
+    renderPhases();
+  }
+}
+
+/* ---------- actions ---------- */
+function goHome() { state.screen="home"; renderProjects(); renderAll(); }
+function startNew() {
+  state.screen="setup";
+  state.presetIndex=2; state.uploaded=false;
+  $("#setup-name").value="";
+  $("#setup-rows").value=PRESETS[2].rows;
+  $("#setup-cols").value=PRESETS[2].cols;
+  setUploaded(false);
+  renderPresets();
+  renderAll();
+}
+function setUploaded(v) {
+  state.uploaded=v;
+  $("#upload-empty").classList.toggle("hidden", v);
+  $("#upload-filled").classList.toggle("hidden", !v);
+  $("#upload-box").style.border = v ? "1px solid #e8ebf2" : "1.5px dashed #c3cbd9";
+}
+function createProject() {
+  const name = $("#setup-name").value.trim() || "未命名拼圖";
+  const rows = parseInt($("#setup-rows").value,10) || 40;
+  const cols = parseInt($("#setup-cols").value,10) || 25;
+  state.project = { name, rows, cols, pieces:rows*cols, confirmed:0,
+    thumb:"linear-gradient(150deg,#1e3a8a,#5b21b6 45%,#be185d 75%,#f97316)" };
+  state.loc = { row:Math.ceil(rows/2), col:Math.ceil(cols/2), conf:92 };
+  openApp("capture");
+}
+function openProject(i) { state.project = PROJECTS[i]; openApp("capture"); }
+function openApp(tab) {
+  state.screen="app"; state.tab=tab; state.phase="aim"; renderAll();
+}
+function switchTab(tab) { state.tab=tab; renderAll(); }
+
+function setPhase(ph) { state.phase=ph; renderPhases(); }
+function recognize() {
+  setPhase("recognizing");
+  setTimeout(() => {
+    // pick a believable confidence
+    state.loc.conf = 86 + Math.floor(Math.random()*12);
+    setPhase("result");
+  }, 1700);
+}
+
+/* ---------- crop pan/zoom ---------- */
+function bindCrop() {
+  const stage = $("#crop-stage");
+  const onDown = (e) => {
+    state.crop.dragging=true; renderCropCursor();
+    const pt = pointer(e);
+    state.crop.lastX=pt.x; state.crop.lastY=pt.y;
+    stage.setPointerCapture && e.pointerId!=null && stage.setPointerCapture(e.pointerId);
+  };
+  const onMove = (e) => {
+    if (!state.crop.dragging) return;
+    const pt = pointer(e);
+    state.crop.x += pt.x - state.crop.lastX;
+    state.crop.y += pt.y - state.crop.lastY;
+    state.crop.lastX=pt.x; state.crop.lastY=pt.y;
+    applyCropTransform();
+  };
+  const onUp = () => { state.crop.dragging=false; renderCropCursor(); };
+  stage.addEventListener("pointerdown", onDown);
+  stage.addEventListener("pointermove", onMove);
+  stage.addEventListener("pointerup", onUp);
+  stage.addEventListener("pointerleave", onUp);
+  $("#crop-zoom").addEventListener("input", (e) => {
+    state.crop.zoom = parseFloat(e.target.value); applyCropTransform();
+  });
+}
+function pointer(e) { return { x:e.clientX, y:e.clientY }; }
+function resetCrop() {
+  state.crop.zoom=1; state.crop.x=0; state.crop.y=0;
+  $("#crop-zoom").value=1; applyCropTransform();
+}
+
+/* ---------- wiring ---------- */
+function bind() {
+  $("#btn-start-new").addEventListener("click", startNew);
+  $$(".js-go-home").forEach(e => e.addEventListener("click", goHome));
+  $("#btn-create").addEventListener("click", createProject);
+  $("#upload-box").addEventListener("click", () => setUploaded(!state.uploaded));
+
+  $("#btn-capture").addEventListener("click", () => { resetCrop(); setPhase("cropped"); });
+  $("#btn-retake").addEventListener("click", () => setPhase("aim"));
+  $("#btn-reset-crop").addEventListener("click", resetCrop);
+  $("#btn-recognize").addEventListener("click", recognize);
+  $("#btn-re-recognize").addEventListener("click", recognize);
+
+  $("#btn-style-a").addEventListener("click", () => { state.resultStyle="A"; renderResult(); });
+  $("#btn-style-b").addEventListener("click", () => { state.resultStyle="B"; renderResult(); });
+  $("#btn-mark").addEventListener("click", () => { state.markConfirmed=!state.markConfirmed; renderResult(); });
+
+  $("#btn-confirm").addEventListener("click", () => {
+    if (state.markConfirmed) {
+      state.project.confirmed = Math.min(state.project.pieces, state.project.confirmed+1);
+    }
+    state.phase="aim";
+    switchTab("map");
+  });
+
+  $$(".nav-item").forEach(n =>
+    n.addEventListener("click", () => switchTab(n.dataset.tab)));
+
+  bindCrop();
+}
+
+/* ---------- init ---------- */
+function init() {
+  renderProjects();
+  renderPresets();
+  renderRecent();
+  renderToggles();
+  renderFrameModes();
+  bind();
+  renderAll();
+}
+init();
+</script>
+</body>
+</html>
