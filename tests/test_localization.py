@@ -6,7 +6,7 @@ import cv2
 import numpy as np
 import pytest
 from tests._synthetic import generate_synthetic_piece
-from source.features.localization.locator import locate_piece, _build_region_hint
+from source.features.localization.locator import locate_piece, _assess_position
 from source.features.segmentation.detector import segment_pieces, extract_piece_images
 
 DATA_DIR = Path(__file__).parent.parent / "data"
@@ -271,26 +271,41 @@ def test_real_piece_grid_localization(reference_image, piece_path, gt_row, gt_co
 
 
 # ---------------------------------------------------------------------------
-# 方案1：_build_region_hint 純函式單元測試（候選集中→給區塊；分散/單一→None）
+# 方案1：_assess_position 純函式單元測試
+#   確定(綠)：單一候選 / 前兩名落在彼此 ±5 內 → (True, None)
+#   找不到(洋紅)：前兩名分散 → (False, rank1 週圍 ±5 搜尋區塊)
 # ---------------------------------------------------------------------------
+ROWS_T, COLS_T = 40, 25
+
+
 def _cells(*pairs):
     return [{"grid_pos": p, "score": 0.5, "rotation": 0.0} for p in pairs]
 
 
-def test_region_hint_clustered_returns_zone():
-    """前幾名集中於一小區 → 回傳涵蓋它們的搜尋區塊。"""
-    hint = _build_region_hint(_cells((5, 10), (6, 10), (5, 11)))
-    assert hint is not None
-    assert hint["row_range"] == (5, 6)
-    assert hint["col_range"] == (10, 11)
+def test_assess_confident_when_top2_agree_within_5():
+    """前兩名落在彼此 ±5 內 → 確定，無搜尋區塊。"""
+    confident, zone = _assess_position(_cells((19, 6), (22, 7), (27, 22)), ROWS_T, COLS_T)
+    assert confident is True and zone is None
 
 
-def test_region_hint_dispersed_returns_none():
-    """前幾名分散 → 回 None（不畫無用大框，改以 rank1 + Top-K 清單為備援）。"""
-    assert _build_region_hint(_cells((19, 6), (22, 7), (27, 22))) is None
+def test_assess_uncertain_when_top2_dispersed():
+    """前兩名分散(>±5) → 不確定，回傳 rank1 週圍 ±5 搜尋區塊（夾限於網格內）。"""
+    confident, zone = _assess_position(_cells((20, 12), (3, 2)), ROWS_T, COLS_T)
+    assert confident is False and zone is not None
+    assert zone["row_range"] == (15, 25)   # 20±5
+    assert zone["col_range"] == (7, 17)    # 12±5
 
 
-def test_region_hint_single_or_empty_returns_none():
-    """只有一個或沒有候選 → 回 None（直接用 grid_pos）。"""
-    assert _build_region_hint(_cells((3, 3))) is None
-    assert _build_region_hint([]) is None
+def test_assess_single_or_empty_is_confident():
+    """只有一個或沒有候選 → 視為確定、無區塊。"""
+    assert _assess_position(_cells((3, 3)), ROWS_T, COLS_T) == (True, None)
+    assert _assess_position([], ROWS_T, COLS_T) == (True, None)
+
+
+def test_assess_saturated_is_uncertain_no_zone():
+    """分數飽和（紋理不足）→ 不確定、標 reason=saturated、不給 ±5 區塊（rank1 不可信）。"""
+    # 即使前兩名一致，只要 saturated=True 也判為不確定
+    confident, region = _assess_position(_cells((10, 10), (10, 11)), ROWS_T, COLS_T, saturated=True)
+    assert confident is False
+    assert region is not None and region.get("reason") == "saturated"
+    assert "row_range" not in region

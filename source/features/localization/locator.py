@@ -22,30 +22,40 @@ class LocateResult:
     region_hint: Optional[Dict[str, Any]] = None
 
 
-# Top-K 候選聚攏判定門檻：前幾名落在 (CLUSTER_SPAN+1)² 格內才視為「集中於一小區」
-_REGION_CLUSTER_SPAN = 2
+
+_CONFIDENT_AGREE = 5   # 前兩名落在彼此 ±5 格內 → 視為指向同一帶，判為「確定」
+_SEARCH_MARGIN = 5     # 不確定時，於 rank1 週圍 ±5 格畫搜尋區塊（與 ±5 合格標準一致）
+_SATURATION_BAND = 0.03    # 分數飽和判定：與最高分相差此值內者算「同分」
+_SATURATION_PLATEAU = 100  # 同分網格數超過此值 → 視為分數飽和（碎片無鑑別資訊）
 
 
-def _build_region_hint(top_cells: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
-    """當前幾名候選「集中於一小區」時，回傳該小區作為人工搜尋區塊建議；否則回 None。
+def _assess_position(top_cells: List[Dict[str, Any]], rows: int, cols: int, saturated: bool = False):
+    """判定定位是否「確定」，並在不確定時回傳搜尋區塊／不可解原因。
 
-    設計依據（實證）：rank1 常是對的、而 rank2/3 多為分散雜訊，故「候選分散」不代表
-    rank1 不可信——此時應以 rank1 為最佳猜測、Top-K 清單為備援，而非畫一個橫跨半張圖的
-    無用大框。只有當前幾名彼此相鄰、明顯指向同一小區時，該小區才是有用的「大概位置」。
+    - 分數飽和（純色/低紋理，rank1 不可信）→ 不確定，回傳 reason='saturated'（無 ±5 區塊，
+      因 rank1 本身無意義），後續標洋紅並提示「紋理不足、無法可靠定位」。
+    - 確定（綠框）：只有單一候選，或前兩名落在彼此 ±5 格內（指向同一帶）。
+    - 不確定（洋紅框）：前兩名分散 → 回傳 rank1 ±SEARCH_MARGIN 搜尋區塊供人工搜尋；
+      只要正解落在此 ±5 範圍即視為合格。
+    回傳 (confident: bool, region_hint: Optional[dict])。
     """
+    if saturated:
+        return False, {'reason': 'saturated',
+                       'note': "紋理不足／分數飽和，rank1 不可信，無法可靠定位（建議人工判斷或跳過）"}
     cells = [c['grid_pos'] for c in top_cells if c.get('grid_pos')]
     if len(cells) <= 1:
-        return None  # 只有一個候選 → 直接用 grid_pos，無需區塊
-    rs = [r for r, _ in cells]
-    cs = [c for _, c in cells]
-    if (max(rs) - min(rs)) > _REGION_CLUSTER_SPAN or (max(cs) - min(cs)) > _REGION_CLUSTER_SPAN:
-        return None  # 候選分散 → 不畫無用大框，改以 Top-K 清單為備援
-    r0, r1, c0, c1 = min(rs), max(rs), min(cs), max(cs)
-    return {
-        'row_range': (r0, r1),
-        'col_range': (c0, c1),
-        'note': f"前幾名集中於 列{r0}~{r1}、行{c0}~{c1} 一小區，建議在此範圍內逐格嘗試",
+        return True, None
+    (r1, c1), (r2, c2) = cells[0], cells[1]
+    if abs(r1 - r2) <= _CONFIDENT_AGREE and abs(c1 - c2) <= _CONFIDENT_AGREE:
+        return True, None  # 前兩名指向同一帶 → 確定
+    r0, rmax = max(1, r1 - _SEARCH_MARGIN), min(rows, r1 + _SEARCH_MARGIN)
+    c0, cmax = max(1, c1 - _SEARCH_MARGIN), min(cols, c1 + _SEARCH_MARGIN)
+    zone = {
+        'row_range': (r0, rmax),
+        'col_range': (c0, cmax),
+        'note': f"未確定單一位置；建議在第1名週圍 列{r0}~{rmax}、行{c0}~{cmax}（±{_SEARCH_MARGIN}格）內搜尋",
     }
+    return False, zone
 
 def _draw_dashed_line(img: np.ndarray, pt1: Tuple[int, int], pt2: Tuple[int, int], color: Tuple[int, int, int], thickness: int = 1, dash_length: int = 8):
     """繪製虛線段的輔助函數"""
@@ -601,6 +611,16 @@ def locate_piece(
             cell_entries.append((score, (r, c), (cx, cy)))
 
     cell_entries.sort(key=lambda e: -e[0])
+
+    # 不可解誠實偵測：分數飽和（大量網格分數逼近最高分）代表碎片本身無鑑別資訊
+    # （純色/低紋理片在帶遮罩相關下整片飽和 → conf≈1.0 卻定位錯）。此時 rank1 不可信，
+    # 後續判為「找不到」標洋紅，避免給出過度自信的綠框假確定。
+    plateau_count = 0
+    if cell_entries:
+        top_score = cell_entries[0][0]
+        plateau_count = sum(1 for s, _, _ in cell_entries if s >= top_score - _SATURATION_BAND)
+    score_saturated = plateau_count > _SATURATION_PLATEAU
+
     top_candidates = []
     for score, (r, c), (cx, cy) in cell_entries[:3]:
         pidx = int(pose_map[cy, cx])
@@ -628,28 +648,36 @@ def locate_piece(
     # 方案1：Top-K 候選清單（供使用者挑選）與「找不到精確位置時的搜尋區塊建議」
     top_cells = [{'grid_pos': c['grid_pos'], 'score': c['score'], 'rotation': c['rot']}
                  for c in top_candidates]
-    region_hint = None
+    # 確定→綠框；找不到（不確定）→洋紅框 + rank1 週圍 ±5 搜尋區塊
+    confident, region_hint = True, None
     if rows is not None and cols is not None and top_cells:
-        region_hint = _build_region_hint(top_cells)
+        confident, region_hint = _assess_position(top_cells, target_rows, target_cols,
+                                                  saturated=score_saturated)
 
     if top_candidates:
         best = top_candidates[0]
         bx, by, bw, bh = best['bbox']
-        cv2.rectangle(annotated, (bx, by), (bx + bw, by + bh), (0, 255, 0), 3)
+        box_color = (0, 255, 0) if confident else (255, 0, 255)  # 綠=確定 / 洋紅=找不到
+        cv2.rectangle(annotated, (bx, by), (bx + bw, by + bh), box_color, 3)
 
-        # 不精確時，於完成圖標出建議搜尋區塊（洋紅大框 + 文字），引導人工在此範圍內試
-        if region_hint is not None:
+        # 不確定時的洋紅標示：
+        #   分散 → 畫 ±5 搜尋區塊框；分數飽和(紋理不足) → rank1 已是洋紅框，僅加註無法可靠定位
+        if region_hint is not None and 'row_range' in region_hint:
             (r0, r1), (c0, c1) = region_hint['row_range'], region_hint['col_range']
             rx0, ry0 = int((c0 - 1) * gw), int((r0 - 1) * gh)
             rx1, ry1 = int(c1 * gw), int(r1 * gh)
             cv2.rectangle(annotated, (rx0, ry0), (rx1, ry1), (255, 0, 255), 4)
-            cv2.putText(annotated, f"Search zone R{r0}-{r1} C{c0}-{c1}",
+            cv2.putText(annotated, f"Search zone R{r0}-{r1} C{c0}-{c1} (+/-5)",
                         (rx0, max(24, ry0 - 12)), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 0, 255), 2)
+        elif region_hint is not None and region_hint.get('reason') == 'saturated':
+            cv2.putText(annotated, "Low texture - cannot localize reliably",
+                        (bx, max(24, by - 30)), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 0, 255), 2)
 
-        info_text = f"Rank 1 (Score: {best['score']:.2f}, Rot: {best['rot']:.1f}deg)"
+        tag = "Confirmed" if confident else "Uncertain"
+        info_text = f"Rank 1 [{tag}] (Score: {best['score']:.2f}, Rot: {best['rot']:.1f}deg)"
         if rows is not None and cols is not None:
             info_text += f" Grid: R{best['grid_pos'][0]} C{best['grid_pos'][1]}"
-        cv2.putText(annotated, info_text, (bx, max(30, by - 10)), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+        cv2.putText(annotated, info_text, (bx, max(30, by - 10)), cv2.FONT_HERSHEY_SIMPLEX, 0.6, box_color, 2)
 
         colors = [(0, 255, 255), (0, 165, 255)]
         for idx, cand in enumerate(top_candidates[1:]):
