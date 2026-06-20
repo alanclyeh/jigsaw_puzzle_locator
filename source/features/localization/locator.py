@@ -1,3 +1,4 @@
+import os
 import cv2
 import numpy as np
 from dataclasses import dataclass, field
@@ -267,8 +268,12 @@ def _global_pose_sweep(
     低紋理 (灰階變異過低、ZNCC 退化) 碎片改用彩色帶遮罩 TM_CCORR_NORMED。
     """
     ref_h, ref_w = reference.shape[:2]
-    # 降採樣使網格長邊約 64px，兼顧解析度與速度
-    RS = min(1.0, 64.0 / max(L_grid, 1e-6))
+    # 降採樣使網格長邊約 128px（≈原圖原生解析度）。
+    # 實證 (output/grid_px_sweep.md) cap 64→128 命中率不變(44%)，但已命中片的
+    # 落點精確率提升 (eval_native 91%→100%)；代價約 4 倍耗時。取精度優先設 128。
+    # 可由環境變數 JP_GRID_PX 覆寫（如回退 64 換取速度）。
+    grid_px = float(os.environ.get("JP_GRID_PX", "128.0"))
+    RS = min(1.0, grid_px / max(L_grid, 1e-6))
     ref_s = cv2.resize(reference, (max(8, int(ref_w * RS)), max(8, int(ref_h * RS))), interpolation=cv2.INTER_AREA) if RS < 1.0 else reference
 
     gray_piece = cv2.cvtColor(piece_bgr, cv2.COLOR_BGR2GRAY)
