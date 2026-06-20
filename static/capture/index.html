@@ -243,7 +243,7 @@ function detectPieceBBox() {
   const corners = [[1, 1], [w - 2, 1], [1, h - 2], [w - 2, h - 2]];
   const rs = [], gs = [], bs = [];
   for (const [x, y] of corners) { const i = (y * w + x) * 4; rs.push(d[i]); gs.push(d[i + 1]); bs.push(d[i + 2]); }
-  const med = (a) => a.slice().sort((p, q) => p - q)[a.length >> 1];
+  const med = (a) => { const s = a.slice().sort((p, q) => p - q); return (s[(s.length - 1) >> 1] + s[s.length >> 1]) / 2; };
   const br = med(rs), bg = med(gs), bb = med(bs);
   let minx = w, miny = h, maxx = -1, maxy = -1, cnt = 0;
   for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
@@ -285,7 +285,7 @@ function enterEdit() {
   $("placeholder").style.display = "none";
   frozen.style.display = "block"; cropLayer.style.display = "block";
   $("startControls").style.display = "none"; $("editControls").style.display = "block";
-  zoom.value = 1;
+  zoom.max = 5; zoom.value = 1;        // 每片重置滑桿範圍，避免上限被前一片的自動框撐大殘留
   reflow(true);                       // 先置中整片可見（自動框失敗時的後備）
   if (autoFitPiece()) toast("已自動框住單片，可再拖曳/縮放微調");
   refreshCellInfo();
