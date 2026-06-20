@@ -13,6 +13,8 @@
 - **執行定位 CLI 原型**：`python scripts/locate_piece.py <reference.jpg> <piece_photo.jpg>`
 - **啟動 FastAPI 本地開發伺服器**：`uvicorn source.app:app --reload` (暫未擴展)
 - **啟動單片採集 Web App**：`python scripts/run_capture_server.py`（手機 https）或 `--no-tls`（桌機 localhost）。用來拍單片、手動裁切、輸入行列，存成 `data/pieces_c{col}_r{row}.jpg` 測試資料。
+- **啟動拼圖定位助手 Web App（正式版）**：`python scripts/run_webapp_server.py`（手機 https）或 `--no-tls`（桌機 localhost）。完整流程：建立專案 → 拍單片 → 建議位置 → 確認標記 → 全圖/進度。後端 FastAPI + SQLite（`data/webapp/jp.db`），規格見 [doc/webapp_spec.md](file:///Users/alan.yeh/Workspace/my_projects/jp_locator/doc/webapp_spec.md)。
+- **執行 Web App 後端測試**：`python3 -m pytest tests/test_webapp.py -v`（快速，stub 定位器）；加 `-m "not slow"` 略過真實定位端到端測試。
 
 ## Code Conventions & Automation
 
