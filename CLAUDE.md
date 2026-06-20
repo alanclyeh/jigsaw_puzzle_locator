@@ -13,6 +13,7 @@
 - **執行定位 CLI 原型**：`python scripts/locate_piece.py <reference.jpg> <piece_photo.jpg>`
 - **啟動 FastAPI 本地開發伺服器**：`uvicorn source.app:app --reload` (暫未擴展)
 - **啟動單片採集 Web App**：`python scripts/run_capture_server.py`（手機 https）或 `--no-tls`（桌機 localhost）。用來拍單片、手動裁切、輸入行列，存成 `data/pieces_c{col}_r{row}.jpg` 測試資料。
+- **啟動 Puzzle Locator 本機應用**：`python scripts/run_locator_server.py`（手機 https）或 `--no-tls`（桌機 localhost）。行動端完整應用（前端 [static/locator/index.html](file:///Users/alan.yeh/Workspace/my_projects/jp_locator/static/locator/index.html)）：建立專案、拍單片→裁切→`locate_piece` 辨識位置（含 Top-K 候選）、全圖/進度/設定。後端 [source/locator_web/](file:///Users/alan.yeh/Workspace/my_projects/jp_locator/source/locator_web)（FastAPI + SQLite `data/locator.db`，每專案影像存 `data/projects/{id}/`）。拍片裁切沿用 capture 的原生全解析度管線（`MIN_CROP_PX` 品質閘）。
 
 ## Code Conventions & Automation
 
