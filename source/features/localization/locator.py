@@ -271,8 +271,14 @@ def _global_pose_sweep(
     # 降採樣使網格長邊約 128px（≈原圖原生解析度）。
     # 實證 (output/grid_px_sweep.md) cap 64→128 命中率不變(44%)，但已命中片的
     # 落點精確率提升 (eval_native 91%→100%)；代價約 4 倍耗時。取精度優先設 128。
-    # 可由環境變數 JP_GRID_PX 覆寫（如回退 64 換取速度）。
-    grid_px = float(os.environ.get("JP_GRID_PX", "128.0"))
+    # 可由環境變數 JP_GRID_PX 覆寫（如回退 64 換取速度）；非法值（空字串/非數字/
+    # 非正數）一律回退預設，避免定位中途因環境變數設錯而崩潰或產生退化結果。
+    try:
+        grid_px = float(os.environ.get("JP_GRID_PX", "128.0"))
+        if not (grid_px > 0):
+            raise ValueError
+    except ValueError:
+        grid_px = 128.0
     RS = min(1.0, grid_px / max(L_grid, 1e-6))
     ref_s = cv2.resize(reference, (max(8, int(ref_w * RS)), max(8, int(ref_h * RS))), interpolation=cv2.INTER_AREA) if RS < 1.0 else reference
 
