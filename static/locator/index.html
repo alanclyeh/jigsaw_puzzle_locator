@@ -544,7 +544,7 @@ function renderCropped(){
     <div id="stage" style="aspect-ratio:1/1;">
       <canvas id="frozen"></canvas>
       <div id="cropBox"></div>${corners}
-      <div class="pill-info" style="left:50%;bottom:14px;transform:translateX(-50%);">拖曳移動 · 下方滑桿縮放，把單片對進框內</div></div>
+      <div class="pill-info" style="left:50%;bottom:14px;transform:translateX(-50%);">拖曳移動 · 雙指捏合或下方滑桿縮放，把單片對進框內</div></div>
     <div style="display:flex;align-items:center;gap:12px;margin:16px 4px 0;">
       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#94a3b8" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3-3M8 11h6"/></svg>
       <input id="zoom" type="range" min="1" max="5" step="0.01" value="1" style="flex:1;">
@@ -559,10 +559,38 @@ function renderCropped(){
   $("resetCrop").onclick=()=>{ $("zoom").value=1; cropper.zoom=1; reflowCrop(true); autoFit(); };
   $("retake").onclick=()=>{ S.cap.phase="aim"; renderCapture(); setTimeout(()=>$("pieceInput").click(),0); };
   $("recognize").onclick=recognize;
-  const stage=$("stage");
-  stage.addEventListener("pointerdown",(e)=>{ cropper.drag={x:e.clientX,y:e.clientY,tx:cropper.tf.tx,ty:cropper.tf.ty}; stage.setPointerCapture(e.pointerId); });
-  stage.addEventListener("pointermove",(e)=>{ if(!cropper.drag)return; cropper.tf.tx=cropper.drag.tx+(e.clientX-cropper.drag.x); cropper.tf.ty=cropper.drag.ty+(e.clientY-cropper.drag.y); applyCrop(); });
-  const end=()=>cropper.drag=null; stage.addEventListener("pointerup",end); stage.addEventListener("pointercancel",end); stage.addEventListener("pointerleave",end);
+  bindCropGestures($("stage"));
+}
+/* 單指拖曳平移 + 雙指捏合縮放（手機上「縮放」的自然手勢，與下方滑桿同步驅動 cropper.zoom，
+   確保縮放後 recognize() 真的裁到放大的區域。stage 設 touch-action:none 才不會被瀏覽器手勢吃掉）。*/
+function bindCropGestures(stage){
+  const ptrs=new Map(); let pinch=null;
+  stage.addEventListener("pointerdown",(e)=>{
+    ptrs.set(e.pointerId,{x:e.clientX,y:e.clientY}); stage.setPointerCapture(e.pointerId);
+    if(ptrs.size>=2){ // 進入捏合：記錄初始指距/縮放與雙指中點下的影像座標當錨點
+      cropper.drag=null; const p=[...ptrs.values()],t=cropper.tf,r=stage.getBoundingClientRect();
+      const mx=(p[0].x+p[1].x)/2,my=(p[0].y+p[1].y)/2;
+      pinch={ d0:Math.hypot(p[0].x-p[1].x,p[0].y-p[1].y)||1, z0:cropper.zoom,
+        ix:(mx-r.left-t.tx)/t.s, iy:(my-r.top-t.ty)/t.s };
+    } else { cropper.drag={x:e.clientX,y:e.clientY,tx:cropper.tf.tx,ty:cropper.tf.ty}; }
+  });
+  stage.addEventListener("pointermove",(e)=>{
+    if(!ptrs.has(e.pointerId)) return; ptrs.set(e.pointerId,{x:e.clientX,y:e.clientY});
+    if(pinch && ptrs.size>=2){ // 以中點為錨點縮放：縮放後該影像點仍對齊中點
+      const p=[...ptrs.values()],r=stage.getBoundingClientRect();
+      const mx=(p[0].x+p[1].x)/2,my=(p[0].y+p[1].y)/2;
+      const d=Math.hypot(p[0].x-p[1].x,p[0].y-p[1].y),zEl=$("zoom");
+      let z=pinch.z0*(d/pinch.d0); z=Math.max(+zEl.min,Math.min(+zEl.max,z));
+      cropper.zoom=z; if(zEl) zEl.value=z;
+      const t=cropper.tf; t.s=t.baseS*z; t.tx=(mx-r.left)-pinch.ix*t.s; t.ty=(my-r.top)-pinch.iy*t.s; applyCrop();
+    } else if(cropper.drag){
+      cropper.tf.tx=cropper.drag.tx+(e.clientX-cropper.drag.x); cropper.tf.ty=cropper.drag.ty+(e.clientY-cropper.drag.y); applyCrop();
+    }
+  });
+  const end=(e)=>{ ptrs.delete(e.pointerId); if(ptrs.size<2) pinch=null;
+    if(ptrs.size===1){ const v=[...ptrs.values()][0]; cropper.drag={x:v.x,y:v.y,tx:cropper.tf.tx,ty:cropper.tf.ty}; }
+    else if(ptrs.size===0){ cropper.drag=null; } };
+  stage.addEventListener("pointerup",end); stage.addEventListener("pointercancel",end); stage.addEventListener("pointerleave",end);
 }
 function loadCropImage(file){
   const img=new Image();
