@@ -541,7 +541,7 @@ const MIN_CROP_PX = 600, AUTOFIT_FILL = 0.86, BG_DIST_TH = 48, FRAME_RATIO = 0.7
 const cropper = { frozen:null, w:0, h:0, frame:{x:0,y:0,size:0}, tf:{baseS:1,s:1,tx:0,ty:0}, zoom:1, drag:null };
 function renderCropped(){
   $("tabBody").innerHTML = `<div class="pad fadeUp" style="padding-top:0;">
-    <div id="stage">
+    <div id="stage" style="aspect-ratio:1/1;">
       <canvas id="frozen"></canvas>
       <div id="cropBox"></div>${corners}
       <div class="pill-info" style="left:50%;bottom:14px;transform:translateX(-50%);">拖曳移動 · 下方滑桿縮放，把單片對進框內</div></div>
