@@ -415,17 +415,20 @@ function renderList(){
       :(r.pred_row?`建議 第 ${r.pred_row} 列 · 第 ${r.pred_col} 行`:"未定位");
     const conf=r.confidence!=null?` · 符合度 ${Math.round(r.confidence*100)}%`:"";
     const canConfirm=r.final_row||r.pred_row;
-    return `<div class="card" data-piece="${r.id}" data-tap style="display:flex;align-items:center;gap:13px;padding:11px 13px;cursor:${canConfirm?'pointer':'default'};">
+    const hint=r.confirmed?' · 點看定位':(canConfirm?' · 點改位置':' · 點可指定位置');
+    return `<div class="card" data-piece="${r.id}" data-tap style="display:flex;align-items:center;gap:13px;padding:11px 13px;cursor:pointer;">
       <div style="width:42px;height:42px;border-radius:11px;flex:none;overflow:hidden;background:#e9edf5;">
         <img src="/api/projects/${p.id}/pieces/${r.id}/image" style="width:100%;height:100%;object-fit:cover;" alt=""></div>
       <div style="flex:1;min-width:0;">
         <div style="font-size:14px;font-weight:700;">${pos}</div>
-        <div style="font-size:12px;color:var(--soft);font-weight:500;margin-top:1px;">${r.confirmed?'已確認':'未確認'}${conf}${canConfirm?' · 點看定位':''}</div></div>
+        <div style="font-size:12px;color:var(--soft);font-weight:500;margin-top:1px;">${r.confirmed?'已確認':'未確認'}${conf}${hint}</div></div>
       <div class="cb" data-id="${r.id}" data-tap style="width:24px;height:24px;border-radius:7px;flex:none;display:flex;align-items:center;justify-content:center;cursor:${canConfirm?'pointer':'not-allowed'};
         border:${r.confirmed?'none':'2px solid #cbd5e1'};background:${r.confirmed?'var(--ok)':'#fff'};opacity:${canConfirm?1:.4};">${r.confirmed?SVG.check("#fff",3.5):''}</div>
-      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#cbd5e1" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex:none;"><path d="m9 18 6-6-6-6"/></svg>
+      <div class="del" data-id="${r.id}" data-tap title="刪除此單片" style="width:30px;height:30px;border-radius:9px;flex:none;display:flex;align-items:center;justify-content:center;cursor:pointer;color:#dc2626;">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m2 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6M10 11v6M14 11v6"/></svg></div>
     </div>`;}).join("");
   box.querySelectorAll(".cb").forEach(el=>el.onclick=(e)=>{ e.stopPropagation(); toggleConfirm(+el.dataset.id); });
+  box.querySelectorAll(".del").forEach(el=>el.onclick=(e)=>{ e.stopPropagation(); deletePiece(+el.dataset.id); });
   box.querySelectorAll("[data-piece]").forEach(el=>el.onclick=()=>openPieceDetail(+el.dataset.piece));
 }
 async function toggleConfirm(pieceId){
@@ -438,12 +441,24 @@ async function toggleConfirm(pieceId){
     await refreshPieces(); renderApp();
   }catch(e){ toast(e.message,true); }
 }
+async function deletePiece(pieceId){
+  const piece=S.pieces.find(x=>x.id===pieceId); if(!piece) return;
+  const pos=(piece.final_row&&piece.final_col)?`第 ${piece.final_row} 列 · 第 ${piece.final_col} 行`
+    :(piece.pred_row?`建議 第 ${piece.pred_row} 列 · 第 ${piece.pred_col} 行`:"未定位");
+  if(!confirm(`確定刪除這片單片（${pos}）？此動作無法復原。`)) return;
+  try{
+    await api.json(`/api/projects/${S.project.id}/pieces/${pieceId}`,{method:"DELETE"});
+    toast("單片已刪除");
+    if(S.detail&&S.detail.pieceId===pieceId) closeDetail();
+    await refreshPieces(); renderApp();
+  }catch(e){ toast(e.message,true); }
+}
 
 /* ---------------------------- 單片詳情 overlay（全圖定位 + 局部放大）---------------------------- */
 function openPieceDetail(pieceId){
   const piece=S.pieces.find(x=>x.id===pieceId); if(!piece) return;
-  const row=piece.final_row||piece.pred_row, col=piece.final_col||piece.pred_col;
-  if(!row||!col) return toast("此片尚無位置，請先到拍照分頁辨識", true);
+  // 未定位的片預設指向 (1,1) 供手動指定；已有建議/確認位置則沿用
+  const row=piece.final_row||piece.pred_row||1, col=piece.final_col||piece.pred_col||1;
   S.detail={pieceId,row,col,style:"zoom"};
   renderPieceDetail();
 }
@@ -451,8 +466,21 @@ function closeDetail(){ S.detail=null; $("overlay").classList.add("hidden"); $("
 function renderPieceDetail(){
   const p=S.project, d=S.detail; const piece=S.pieces.find(x=>x.id===d.pieceId); if(!piece) return closeDetail();
   const isZoom=d.style==="zoom";
+  const editable=!piece.confirmed;   // 僅未確認單片可改行列
   const status=piece.confirmed?`已確認 · 第 ${d.row} 列 · 第 ${d.col} 行`
-    :(piece.final_row?`第 ${d.row} 列 · 第 ${d.col} 行`:`建議 第 ${d.row} 列 · 第 ${d.col} 行`);
+    :(piece.final_row?`未確認 · 第 ${d.row} 列 · 第 ${d.col} 行`
+      :(piece.pred_row?`建議 第 ${d.row} 列 · 第 ${d.col} 行`:`未定位 · 可手動指定行列`));
+  const editBlock = editable?`
+      <div class="section" style="margin:16px 2px 8px;">修改行列（未確認，可手動指定）</div>
+      <div class="row" style="margin-bottom:12px;">
+        <div style="flex:1;" class="card"><div style="padding:8px 12px;"><div style="font-size:11px;color:var(--soft);font-weight:600;">列</div>
+          <input id="dtRow" type="number" min="1" max="${p.rows}" inputmode="numeric" value="${d.row}" style="width:100%;font-size:20px;font-weight:800;border:none;outline:none;background:transparent;"></div></div>
+        <div style="flex:1;" class="card"><div style="padding:8px 12px;"><div style="font-size:11px;color:var(--soft);font-weight:600;">行</div>
+          <input id="dtCol" type="number" min="1" max="${p.cols}" inputmode="numeric" value="${d.col}" style="width:100%;font-size:20px;font-weight:800;border:none;outline:none;background:transparent;"></div></div></div>
+      <div class="row">
+        <button class="btn ghost" id="dtSave" style="flex:1;">更新位置</button>
+        <button class="btn ok" id="dtConfirm" style="flex:1;">確認此位置</button></div>`:`
+      <div style="margin-top:14px;font-size:12px;color:var(--soft);text-align:center;line-height:1.6;">已確認的片如需修正，請先到「進度」取消勾選再回來改</div>`;
   const ov=$("overlay"); ov.classList.remove("hidden");
   ov.innerHTML = `
     <div style="flex:none;padding:8px 20px 12px;display:flex;align-items:center;gap:12px;">
@@ -467,10 +495,34 @@ function renderPieceDetail(){
         <div id="dtZoom" class="${isZoom?'on':''}" data-tap>聚焦放大</div>
         <div id="dtFull" class="${isZoom?'':'on'}" data-tap>全圖定位</div></div>
       ${isZoom?zoomHtml(d.row,d.col):fullHtml(d.row,d.col)}
-      <div style="margin-top:14px;font-size:12px;color:var(--soft);text-align:center;line-height:1.6;">綠框＝已定位的其他片　·　藍框＝這一片的位置</div></div>`;
+      <div style="margin-top:14px;font-size:12px;color:var(--soft);text-align:center;line-height:1.6;">綠框＝已定位的其他片　·　藍框＝這一片的位置</div>
+      ${editBlock}
+      <button class="btn ghost" id="dtDelete" style="margin-top:18px;color:var(--danger);border-color:#fecaca;">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m2 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6M10 11v6M14 11v6"/></svg>
+        刪除此單片</button></div>`;
   $("dtClose").onclick=closeDetail;
   $("dtZoom").onclick=()=>{ S.detail.style="zoom"; renderPieceDetail(); };
   $("dtFull").onclick=()=>{ S.detail.style="full"; renderPieceDetail(); };
+  $("dtDelete").onclick=()=>deletePiece(d.pieceId);
+  if(editable){
+    $("dtRow").oninput=(e)=>{ S.detail.row=Math.max(1,Math.min(p.rows,+e.target.value||1)); };
+    $("dtCol").oninput=(e)=>{ S.detail.col=Math.max(1,Math.min(p.cols,+e.target.value||1)); };
+    $("dtRow").onchange=()=>renderPieceDetail();   // 更新上方放大/全圖標記
+    $("dtCol").onchange=()=>renderPieceDetail();
+    $("dtSave").onclick=()=>saveDetailLocation(false);
+    $("dtConfirm").onclick=()=>saveDetailLocation(true);
+  }
+}
+async function saveDetailLocation(confirmed){
+  const p=S.project, d=S.detail; const row=d.row, col=d.col;
+  if(!(row>=1&&row<=p.rows&&col>=1&&col<=p.cols)) return toast(`請輸入有效的列(1~${p.rows})與行(1~${p.cols})`,true);
+  try{
+    await api.json(`/api/projects/${p.id}/pieces/${d.pieceId}/confirm`,
+      {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({row,col,confirmed})});
+    toast(confirmed?`已確認：第 ${row} 列 · 第 ${col} 行`:`已更新位置：第 ${row} 列 · 第 ${col} 行`);
+    await refreshPieces(); renderApp();
+    if(confirmed) closeDetail(); else renderPieceDetail();  // 確認後回清單；僅更新則留在詳情
+  }catch(e){ toast(e.message,true); }
 }
 
 /* ---------------------------- 設定 SETTINGS ---------------------------- */
