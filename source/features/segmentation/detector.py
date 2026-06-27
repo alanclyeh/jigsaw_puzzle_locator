@@ -271,6 +271,10 @@ def _grabcut_refine(mask: np.ndarray, image: np.ndarray) -> np.ndarray:
     bgd_model = np.zeros((1, 65), dtype=np.float64)
     fgd_model = np.zeros((1, 65), dtype=np.float64)
 
+    # 決定性化（非演算法變更）：grabCut 內部 GMM 以 cv::theRNG() 隨機初始化，導致同一張
+    # 照片每次去背遮罩有 ~2% 差異。每次呼叫前固定全域 RNG seed，使每張圖去背結果可重現、
+    # 與呼叫順序無關，消除下游定位（尤其金字塔粗掃對近平手片）的 run 間翻動。
+    cv2.setRNGSeed(20240613)
     try:
         cv2.grabCut(image, gc_mask, None, bgd_model, fgd_model, 3, cv2.GC_INIT_WITH_MASK)
     except cv2.error:
