@@ -319,130 +319,151 @@ def _global_pose_sweep(
     gh: float,
     coarse_step: float = 12.0,
     angle_step: float = 3.0,
-    refine_band: float = 9.0,
-    top_n_refine: int = 60,  # 只精修 coarse 分數 top-N 格 (最終僅回傳 top-3，精修全部網格純浪費)；60 係對本專案 40×25=1000 格驗證，更大網格可按比例上調
+    refine_band: float = 12.0,
+    top_n_refine: int = 80,  # 金字塔 Level-1 精修的候選格數 K（最終僅回傳 top-3）；80 係對本專案 40×25=1000 格驗證，更大網格可按比例上調
     scale_steps: Tuple[float, ...] = (0.94, 1.0, 1.06),
-) -> Tuple[np.ndarray, np.ndarray, list, float]:
+) -> Tuple[np.ndarray, np.ndarray, list, float, int]:
     """
-    全圖姿態掃描（粗→精兩階段，取代原本 360 度 3° 全圖全掃）：
-      階段 A 粗掃：以 coarse_step(12°) 全 360 度 × 多尺度做全圖帶遮罩匹配，
-                   分數以「中心對齊」逐像素 max 累積。此階段為主成本（實測 ~55%），
-                   主要靠 JP_GRID_PX=64 降採樣壓低（階段A 76.7s→17.7s）。
-                   （實測角度步進放寬至 18°/尺度砍至 1 檔會讓近平手案例排名翻轉、
-                   eval_native 掉片，故保留 12°×3 尺度。）
-      階段 B 精修：僅對 coarse 分數 top_n_refine(預設 60) 格做精修——最終只回傳 top-3，
-                   精修全部網格純浪費（本專案 40×25=1000 格實測 ~63s@128 / ~16s@64 vs
-                   top-60 ~2.5s；函式預設網格 15×15=225 格則對應更少）。
-                   未精修的格仍保有粗掃分數、不影響候選排名，故此裁剪不傷命中率。
-                   在各候選中心的小 ROI 內，以 angle_step(3°) 在粗掃最佳角 ±refine_band
-                   範圍與多尺度精修，補回精確分數/旋轉角。ROI 卷積成本相對全圖可忽略。
-    回傳 (分數累積圖, 姿態索引圖, 姿態表, 降採樣比例 RS)；姿態表項目: (angle, ds, rw, rh)。
+    全圖姿態掃描（空間影像金字塔 coarse-to-fine 兩層）：
+      Level-0 粗定位（grid_px×0.75≈48px，單一尺度 ds=1.0）：以 coarse_step(12°) 全 360 度
+                   做全圖帶遮罩匹配，逐網格取最高分產生候選。此層只「篩選候選格＋粗略角度」，
+                   不決定最終排名，故可在低解析度＋單尺度跑（相對 fine×3尺度 ~省數倍）。
+      Level-1 精修（grid_px，預設 64）：僅對 Level-0 分數 top_n_refine(K=80) 格，在各候選
+                   中心的小 ROI 內，以 angle_step(3°) 在粗角 ±refine_band(12°) 與多尺度精修，
+                   補回精確分數/旋轉角。最終 top-3 一律取自此層全解析度分數，落點精度不受
+                   Level-0 降採樣影響。±12° 帶寬涵蓋 Level-0 在 48px 下的角度量化誤差。
+    回傳的 acc 只含「被精修格」的全解析度分數（未精修格留 -2，上層因 score≤-1 自動跳過），
+    確保排名由全解析度分數決定（Level-0 低解析 ZNCC 系統性偏高，若混入排名會壓過真格）。
+    「分數飽和」不可解偵測改用 Level-0 全網格粗分分佈，獨立計算後一併回傳。
+    回傳 (分數累積圖, 姿態索引圖, 姿態表, 降採樣比例 RS=Level-1, 粗分飽和格數 coarse_plateau)；
+    姿態表項目: (angle, ds, rw, rh)。
+
+    設計脈絡：階段A 全圖粗掃原為主成本（實測 17.7s@64）；改成 Level-0 在 ~48px 單尺度粗掃
+    再省數倍。實測角度步進放寬至 18°/精修尺度砍至 1 檔會讓近平手案例排名翻轉、eval_native
+    掉片，故 Level-1 保留 12°×3 尺度；改降「空間/候選篩選」解析度（與精修的角度/尺度取樣
+    正交）以提速。Level-0 解析度 0.5(=32px) 過低會掉近平手片，0.75(=48px) 為實測甜蜜點。
 
     高紋理碎片使用帶遮罩 ZNCC (亮度不變)；
     低紋理 (灰階變異過低、ZNCC 退化) 碎片改用彩色帶遮罩 TM_CCORR_NORMED。
     """
     ref_h, ref_w = reference.shape[:2]
-    # 降採樣使網格長邊約 64px。
-    # 實證 (output/grid_px_sweep.md) cap 64→128 命中率不變(44%)，128 僅讓已命中片的
-    # 落點精確率略升 (eval_native 91%→100%)，代價約 4 倍耗時(階段A 17.7s→76.7s)。
-    # 速度優先設 64；需更精落點可由環境變數 JP_GRID_PX=128 覆寫。非法值（空字串/非數字/
-    # 非正數）一律回退預設，避免定位中途因環境變數設錯而崩潰或產生退化結果。
+    # Level-1（精修）網格長邊像素，預設 64；可由 JP_GRID_PX 覆寫（128 換更精落點）。
+    # 非法值（空字串/非數字/非正數）一律回退預設，避免環境變數設錯導致崩潰或退化結果。
     try:
         grid_px = float(os.environ.get("JP_GRID_PX", "64.0"))
         if not (grid_px > 0):
             raise ValueError
     except ValueError:
         grid_px = 64.0
-    RS = min(1.0, grid_px / max(L_grid, 1e-6))
-    ref_s = cv2.resize(reference, (max(8, int(ref_w * RS)), max(8, int(ref_h * RS))), interpolation=cv2.INTER_AREA) if RS < 1.0 else reference
 
     gray_piece = cv2.cvtColor(piece_bgr, cv2.COLOR_BGR2GRAY)
     fg = piece_alpha > 127
     texture_std = float(gray_piece[fg].std()) if fg.any() else 0.0
     use_zncc = texture_std >= 10.0
+    clean_bgr = piece_bgr.copy()
+    clean_bgr[~fg] = 0
 
-    if use_zncc:
-        f = cv2.cvtColor(ref_s, cv2.COLOR_BGR2GRAY).astype(np.float32)
-        f2 = f * f
-        corr_ctx = _build_corr_ctx(f, f2)  # 階段A 全圖掃描重用的預算 FFT
-    else:
-        f = ref_s  # 彩色 CCORR_NORMED 模式
-        f2 = None
-        corr_ctx = None
+    def _build_level(level_px: float, scales: Tuple[float, ...] = scale_steps):
+        """備妥某一金字塔層的搜尋影像 (f, f2, ctx) 與各尺度模板。"""
+        RS = min(1.0, level_px / max(L_grid, 1e-6))
+        ref_s = (cv2.resize(reference, (max(8, int(ref_w * RS)), max(8, int(ref_h * RS))),
+                            interpolation=cv2.INTER_AREA) if RS < 1.0 else reference)
+        if use_zncc:
+            f = cv2.cvtColor(ref_s, cv2.COLOR_BGR2GRAY).astype(np.float32)
+            f2 = f * f
+            ctx = _build_corr_ctx(f, f2)
+        else:
+            f = ref_s
+            f2 = None
+            ctx = None
+        scale_data = []
+        for ds in scales:
+            s = s0 * RS * ds
+            pw = max(4, int(piece_bgr.shape[1] * s))
+            ph = max(4, int(piece_bgr.shape[0] * s))
+            t_bgr = cv2.resize(clean_bgr, (pw, ph), interpolation=cv2.INTER_AREA)
+            t_gray = cv2.cvtColor(t_bgr, cv2.COLOR_BGR2GRAY).astype(np.float32)
+            m0 = cv2.resize(piece_alpha, (pw, ph), interpolation=cv2.INTER_NEAREST)
+            tmpl = t_gray if use_zncc else t_bgr
+            scale_data.append((float(ds), pw, ph, tmpl, m0))
+        return RS, ref_s, f, f2, ctx, scale_data
 
+    # ── Level-0：grid_px×0.75 全圖粗掃，僅單一尺度（候選篩選用）──
+    # 解析度：0.5(=32px) 在去背 grabCut 隨機性帶來的 ~2% 裁切變異下會讓近平手片 c23_r18
+    #   翻轉掉片；0.75(=48px) 保留足夠鑑別力維持 eval_native 11/11。
+    # 尺度：粗掃只需排對候選格＋粗略角度，尺度誤差由 Level-1 多尺度精修補回，故此層只跑
+    #   ds=1.0 單尺度（相對 3 尺度省 ~3×），把 48px 的較高像素成本賺回來、總時維持 <5s。
+    RS_c, ref_c, f_c, f2_c, ctx_c, sdata_c = _build_level(grid_px * 0.75, scales=(1.0,))
+    RHc, RWc = ref_c.shape[:2]
+    acc_c = np.full((RHc, RWc), -2.0, np.float32)
+    pose_c = np.full((RHc, RWc), -1, np.int32)
+    ptable_c = []  # (angle, ...)
+
+    for ds, pw, ph, tmpl, m0 in sdata_c:
+        for a in np.arange(0.0, 360.0, coarse_step):
+            rt, m, rw, rh = _rotate_template(tmpl, m0, pw, ph, float(a))
+            if rw >= RWc or rh >= RHc or m.sum() < 50:
+                continue
+            z = _score_pose(f_c, f2_c, rt, m, use_zncc, ctx=ctx_c)
+            if z is None:
+                continue
+            idx = len(ptable_c)
+            ptable_c.append((float(a),))
+            zh, zw = z.shape
+            oy, ox = rh // 2, rw // 2
+            sub = acc_c[oy:oy + zh, ox:ox + zw]
+            subp = pose_c[oy:oy + zh, ox:ox + zw]
+            better = z > sub
+            sub[better] = z[better]
+            subp[better] = idx
+
+    # 逐網格取 Level-0 最高分 → 候選 (粗分, 粗座標 cy/cx, 粗最佳角)
+    ghs_c, gws_c = gh * RS_c, gw * RS_c
+    cand = []
+    for r in range(1, rows + 1):
+        for c in range(1, cols + 1):
+            y0, y1 = int((r - 1) * ghs_c), int(r * ghs_c)
+            x0, x1 = int((c - 1) * gws_c), int(c * gws_c)
+            sub = acc_c[y0:y1, x0:x1]
+            if sub.size == 0:
+                continue
+            li = np.unravel_index(int(np.argmax(sub)), sub.shape)
+            cy, cx = y0 + li[0], x0 + li[1]
+            pidx = int(pose_c[cy, cx])
+            a0 = ptable_c[pidx][0] if pidx >= 0 else None
+            cand.append((float(sub[li]), cy, cx, a0))
+    cand.sort(key=lambda e: -e[0])
+
+    # 「分數飽和」不可解偵測：用 Level-0 全網格粗分分佈（純色/低紋理片整片逼近最高分）。
+    coarse_plateau = 0
+    if cand:
+        ctop = cand[0][0]
+        coarse_plateau = sum(1 for s, _, _, _ in cand if s >= ctop - _SATURATION_BAND)
+
+    # ── Level-1：fine 解析度，精修 top-K（acc 只放精修分數，未精修格留 -2 由上層跳過）──
+    RS, ref_s, f, f2, ctx, scale_data = _build_level(grid_px)
     RH, RW = ref_s.shape[:2]
     acc = np.full((RH, RW), -2.0, np.float32)
     pose_map = np.full((RH, RW), -1, np.int32)
     pose_table = []
+    ratio = RS / max(RS_c, 1e-9)
 
-    clean_bgr = piece_bgr.copy()
-    clean_bgr[~fg] = 0
-
-    # 每個尺度預先備妥模板 (灰階供 ZNCC、彩色供 CCORR) 與遮罩，粗掃與精修共用。
-    scale_data = []
-    for ds in scale_steps:
-        s = s0 * RS * ds
-        pw = max(4, int(piece_bgr.shape[1] * s))
-        ph = max(4, int(piece_bgr.shape[0] * s))
-        t_bgr = cv2.resize(clean_bgr, (pw, ph), interpolation=cv2.INTER_AREA)
-        t_gray = cv2.cvtColor(t_bgr, cv2.COLOR_BGR2GRAY).astype(np.float32)
-        m0 = cv2.resize(piece_alpha, (pw, ph), interpolation=cv2.INTER_NEAREST)
-        tmpl = t_gray if use_zncc else t_bgr
-        scale_data.append((float(ds), pw, ph, tmpl, m0))
-
-    def _accumulate(z, rw, rh, a, ds):
-        pose_idx = len(pose_table)
-        pose_table.append((float(a), float(ds), rw, rh))
-        zh, zw = z.shape
-        oy, ox = rh // 2, rw // 2
-        sub = acc[oy:oy + zh, ox:ox + zw]
-        sub_pose = pose_map[oy:oy + zh, ox:ox + zw]
-        better = z > sub
-        sub[better] = z[better]
-        sub_pose[better] = pose_idx
-
-    # ── 階段 A：粗角度全圖掃描 ──
-    for ds, pw, ph, tmpl, m0 in scale_data:
-        for a in np.arange(0.0, 360.0, coarse_step):
-            rt, m, rw, rh = _rotate_template(tmpl, m0, pw, ph, float(a))
-            if rw >= RW or rh >= RH or m.sum() < 50:
-                continue
-            z = _score_pose(f, f2, rt, m, use_zncc, ctx=corr_ctx)
-            if z is None:
-                continue
-            _accumulate(z, rw, rh, a, ds)
-
-    # ── 階段 B：top-N 網格候選的局部 ROI 角度/尺度精修 ──
-    ghs, gws = gh * RS, gw * RS
-    cells = []
-    for r in range(1, rows + 1):
-        for c in range(1, cols + 1):
-            y0, y1 = int((r - 1) * ghs), int(r * ghs)
-            x0, x1 = int((c - 1) * gws), int(c * gws)
-            sub = acc[y0:y1, x0:x1]
-            if sub.size == 0:
-                continue
-            li = np.unravel_index(int(np.argmax(sub)), sub.shape)
-            cells.append((float(sub[li]), y0 + li[0], x0 + li[1]))
-    cells.sort(key=lambda e: -e[0])
-
-    for _, cy, cx in cells[:top_n_refine]:
-        pidx = int(pose_map[cy, cx])
-        if pidx < 0:
+    for score_c, cy, cx, a0 in cand[:top_n_refine]:
+        if a0 is None:
             continue
-        a0 = pose_table[pidx][0]
+        fy = int(cy * ratio)
+        fx = int(cx * ratio)
         for ds, pw, ph, tmpl, m0 in scale_data:
             for a in np.arange(a0 - refine_band, a0 + refine_band + 1e-6, angle_step):
                 rt, m, rw, rh = _rotate_template(tmpl, m0, pw, ph, float(a))
                 if rw >= RW or rh >= RH or m.sum() < 50:
                     continue
-                # 在候選中心 (cx, cy) 周圍開一個小 ROI，容許定位點微幅移動。
-                # 精修只在粗掃最佳角附近微調，定位點幾乎不動，視窗取小即可大幅降低 ROI 卷積成本。
-                wnd = max(5, int(0.12 * max(rw, rh)))
-                x0r = max(0, cx - wnd - rw // 2)
-                y0r = max(0, cy - wnd - rh // 2)
-                x1r = min(RW, cx + wnd + rw // 2 + 1)
-                y1r = min(RH, cy + wnd + rh // 2 + 1)
+                # 在候選中心周圍開小 ROI，容許定位點微幅移動（Level-0→Level-1 升採樣有量化誤差）。
+                wnd = max(5, int(0.12 * max(rw, rh)) + int(ratio))
+                x0r = max(0, fx - wnd - rw // 2)
+                y0r = max(0, fy - wnd - rh // 2)
+                x1r = min(RW, fx + wnd + rw // 2 + 1)
+                y1r = min(RH, fy + wnd + rh // 2 + 1)
                 if x1r - x0r <= rw or y1r - y0r <= rh:
                     continue
                 f_roi = f[y0r:y1r, x0r:x1r]
@@ -459,7 +480,7 @@ def _global_pose_sweep(
                     pose_map[gy, gx] = len(pose_table)
                     pose_table.append((float(a), float(ds), rw, rh))
 
-    return acc, pose_map, pose_table, RS
+    return acc, pose_map, pose_table, RS, coarse_plateau
 
 def locate_piece(
     reference: np.ndarray,
@@ -677,7 +698,7 @@ def locate_piece(
     print("[INTERNAL TEMPLATE] SIFT 匹配失敗，啟動全圖姿態掃描帶遮罩匹配...")
 
     s0 = 1.0  # norm_bgr 已正規化至網格尺度
-    acc, pose_map, pose_table, RS = _global_pose_sweep(
+    acc, pose_map, pose_table, RS, coarse_plateau = _global_pose_sweep(
         reference, norm_bgr, norm_alpha, s0, L_grid,
         target_rows, target_cols, gw, gh
     )
@@ -702,11 +723,8 @@ def locate_piece(
     # 不可解誠實偵測：分數飽和（大量網格分數逼近最高分）代表碎片本身無鑑別資訊
     # （純色/低紋理片在帶遮罩相關下整片飽和 → conf≈1.0 卻定位錯）。此時 rank1 不可信，
     # 後續判為「找不到」標洋紅，避免給出過度自信的綠框假確定。
-    plateau_count = 0
-    if cell_entries:
-        top_score = cell_entries[0][0]
-        plateau_count = sum(1 for s, _, _ in cell_entries if s >= top_score - _SATURATION_BAND)
-    score_saturated = plateau_count > _SATURATION_PLATEAU
+    # plateau 由金字塔 Level-0 全網格粗分分佈算出（acc 已只含精修格、不再含全網格分佈）。
+    score_saturated = coarse_plateau > _SATURATION_PLATEAU
 
     top_candidates = []
     for score, (r, c), (cx, cy) in cell_entries[:3]:
