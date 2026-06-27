@@ -14,6 +14,7 @@ data/report*
 data/webapp/
 # Locator 本機後端執行時資料（SQLite DB + 各專案上傳影像，不入版控）
 data/locator/
+data/locator.db
 log/*
 !log/.gitkeep
 output/*
