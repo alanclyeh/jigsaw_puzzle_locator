@@ -251,7 +251,7 @@ def _global_pose_sweep(
     coarse_step: float = 12.0,
     angle_step: float = 3.0,
     refine_band: float = 9.0,
-    top_n_refine: int = 60,  # 只精修 coarse 分數 top-N 格 (最終僅回傳 top-3，精修全 1000 格純浪費)
+    top_n_refine: int = 60,  # 只精修 coarse 分數 top-N 格 (最終僅回傳 top-3，精修全部網格純浪費)；60 係對本專案 40×25=1000 格驗證，更大網格可按比例上調
     scale_steps: Tuple[float, ...] = (0.94, 1.0, 1.06),
 ) -> Tuple[np.ndarray, np.ndarray, list, float]:
     """
@@ -262,7 +262,8 @@ def _global_pose_sweep(
                    （實測角度步進放寬至 18°/尺度砍至 1 檔會讓近平手案例排名翻轉、
                    eval_native 掉片，故保留 12°×3 尺度。）
       階段 B 精修：僅對 coarse 分數 top_n_refine(預設 60) 格做精修——最終只回傳 top-3，
-                   精修全 1000 格純浪費（實測 ~63s@128 / ~16s@64 vs top-60 ~2.5s）。
+                   精修全部網格純浪費（本專案 40×25=1000 格實測 ~63s@128 / ~16s@64 vs
+                   top-60 ~2.5s；函式預設網格 15×15=225 格則對應更少）。
                    未精修的格仍保有粗掃分數、不影響候選排名，故此裁剪不傷命中率。
                    在各候選中心的小 ROI 內，以 angle_step(3°) 在粗掃最佳角 ±refine_band
                    範圍與多尺度精修，補回精確分數/旋轉角。ROI 卷積成本相對全圖可忽略。
