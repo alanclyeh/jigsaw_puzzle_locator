@@ -9,12 +9,14 @@
 from __future__ import annotations
 
 import io
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Callable, Optional
 
 import cv2
 import numpy as np
 from fastapi import Body, FastAPI, Form, HTTPException, UploadFile
+from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse, JSONResponse
 from PIL import Image, ImageOps
 
@@ -58,10 +60,26 @@ def create_app(
     static_dir = Path(static_dir) if static_dir else DEFAULT_STATIC_DIR
     store = Store(data_root)
 
+    using_default_locator = locator is None
     if locator is None:
         from source.webapp.locate_service import locate_piece_image as locator  # noqa: PLW2901
 
-    app = FastAPI(title="Jigsaw Puzzle Locator")
+    @asynccontextmanager
+    async def lifespan(_app: FastAPI):
+        # 預先觸發定位器的延遲匯入（OpenCV/segmentation/locator 重模組），消除
+        # 第一張辨識時的 import 卡頓；在 threadpool 進行避免堵住啟動。
+        if using_default_locator:
+            def _imports() -> None:
+                import source.features.segmentation.detector  # noqa: F401
+                import source.features.localization.locator  # noqa: F401
+
+            try:
+                await run_in_threadpool(_imports)
+            except Exception:
+                pass  # 預熱失敗不影響啟動，首張辨識會再走一次延遲匯入
+        yield
+
+    app = FastAPI(title="Jigsaw Puzzle Locator", lifespan=lifespan)
     app.state.store = store
 
     # ---------- 靜態頁面 ----------
@@ -140,7 +158,12 @@ def create_app(
         piece_bgr = _pil_to_bgr(im)
 
         try:
-            res = locator(ref_bgr, piece_bgr, proj["rows"], proj["cols"])
+            # 定位是秒級 CPU 重活（全姿態掃描 + ZNCC）。若直接在 async handler 內
+            # 同步呼叫，會堵死唯一的事件迴圈，導致辨識期間連「點專案」等其他請求
+            # 都無法派發而整台 server 卡住。改丟 threadpool 執行，事件迴圈即釋出。
+            res = await run_in_threadpool(
+                locator, ref_bgr, piece_bgr, proj["rows"], proj["cols"]
+            )
         except Exception as e:  # 定位內部錯誤不應讓整支 API 500 無訊息
             raise HTTPException(status_code=500, detail=f"定位失敗：{e}")
 
