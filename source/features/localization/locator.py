@@ -251,34 +251,38 @@ def _global_pose_sweep(
     coarse_step: float = 12.0,
     angle_step: float = 3.0,
     refine_band: float = 9.0,
-    top_n_refine: int = 100000,  # 預設精修所有網格候選 (低紋理片正確格 coarse 排名可能偏後)
+    top_n_refine: int = 60,  # 只精修 coarse 分數 top-N 格 (最終僅回傳 top-3，精修全 1000 格純浪費)
     scale_steps: Tuple[float, ...] = (0.94, 1.0, 1.06),
 ) -> Tuple[np.ndarray, np.ndarray, list, float]:
     """
     全圖姿態掃描（粗→精兩階段，取代原本 360 度 3° 全圖全掃）：
       階段 A 粗掃：以 coarse_step(12°) 全 360 度 × 多尺度做全圖帶遮罩匹配，
-                   分數以「中心對齊」逐像素 max 累積。全圖 matchTemplate 次數降為 1/4。
-      階段 B 精修：對每個網格候選（預設 top_n_refine 極大值＝全部格，因低紋理片的
-                   正確格 coarse 排名可能偏後，須全部精修以免漏掉），僅在各候選中心的
-                   小 ROI 內，以 angle_step(3°) 在粗掃最佳角 ±refine_band 範圍與多尺度
-                   精修，補回精確分數/旋轉角。ROI 卷積成本相對全圖卷積可忽略。
+                   分數以「中心對齊」逐像素 max 累積。此階段為主成本（實測 ~55%），
+                   主要靠 JP_GRID_PX=64 降採樣壓低（階段A 76.7s→17.7s）。
+                   （實測角度步進放寬至 18°/尺度砍至 1 檔會讓近平手案例排名翻轉、
+                   eval_native 掉片，故保留 12°×3 尺度。）
+      階段 B 精修：僅對 coarse 分數 top_n_refine(預設 60) 格做精修——最終只回傳 top-3，
+                   精修全 1000 格純浪費（實測 ~63s@128 / ~16s@64 vs top-60 ~2.5s）。
+                   未精修的格仍保有粗掃分數、不影響候選排名，故此裁剪不傷命中率。
+                   在各候選中心的小 ROI 內，以 angle_step(3°) 在粗掃最佳角 ±refine_band
+                   範圍與多尺度精修，補回精確分數/旋轉角。ROI 卷積成本相對全圖可忽略。
     回傳 (分數累積圖, 姿態索引圖, 姿態表, 降採樣比例 RS)；姿態表項目: (angle, ds, rw, rh)。
 
     高紋理碎片使用帶遮罩 ZNCC (亮度不變)；
     低紋理 (灰階變異過低、ZNCC 退化) 碎片改用彩色帶遮罩 TM_CCORR_NORMED。
     """
     ref_h, ref_w = reference.shape[:2]
-    # 降採樣使網格長邊約 128px（≈原圖原生解析度）。
-    # 實證 (output/grid_px_sweep.md) cap 64→128 命中率不變(44%)，但已命中片的
-    # 落點精確率提升 (eval_native 91%→100%)；代價約 4 倍耗時。取精度優先設 128。
-    # 可由環境變數 JP_GRID_PX 覆寫（如回退 64 換取速度）；非法值（空字串/非數字/
+    # 降採樣使網格長邊約 64px。
+    # 實證 (output/grid_px_sweep.md) cap 64→128 命中率不變(44%)，128 僅讓已命中片的
+    # 落點精確率略升 (eval_native 91%→100%)，代價約 4 倍耗時(階段A 17.7s→76.7s)。
+    # 速度優先設 64；需更精落點可由環境變數 JP_GRID_PX=128 覆寫。非法值（空字串/非數字/
     # 非正數）一律回退預設，避免定位中途因環境變數設錯而崩潰或產生退化結果。
     try:
-        grid_px = float(os.environ.get("JP_GRID_PX", "128.0"))
+        grid_px = float(os.environ.get("JP_GRID_PX", "64.0"))
         if not (grid_px > 0):
             raise ValueError
     except ValueError:
-        grid_px = 128.0
+        grid_px = 64.0
     RS = min(1.0, grid_px / max(L_grid, 1e-6))
     ref_s = cv2.resize(reference, (max(8, int(ref_w * RS)), max(8, int(ref_h * RS))), interpolation=cv2.INTER_AREA) if RS < 1.0 else reference
 
