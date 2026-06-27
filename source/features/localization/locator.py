@@ -254,6 +254,7 @@ def _masked_zncc_map_ctx(ctx: Dict[str, Any], t: np.ndarray, m: np.ndarray) -> O
     n = float(m.sum())
     if n < 50:
         return None
+    assert t.shape == m.shape, "模板與遮罩須同形（_rotate_template 保證）"
     tm = t * m
     kh, kw = m.shape  # 旋轉後模板與遮罩同形
     Nh, Nw = ctx["Nh"], ctx["Nw"]
