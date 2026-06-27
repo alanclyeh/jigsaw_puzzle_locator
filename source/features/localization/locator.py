@@ -212,6 +212,68 @@ def _masked_zncc_map(f: np.ndarray, f2: np.ndarray, t: np.ndarray, m: np.ndarray
     # FFT 浮點誤差在近零變異視窗可能使分數輕微越界，夾限避免 max 累積偏好虛高分
     return np.clip(num / (np.sqrt(var_f * var_t) + 1e-6), -1.0, 1.0)
 
+def _build_corr_ctx(f: np.ndarray, f2: np.ndarray) -> Dict[str, Any]:
+    """預先對搜尋影像做一次 FFT，供整輪姿態掃描重用（階段A加速核心）。
+
+    帶遮罩 ZNCC 的三個相關項 A=corr(f,t·m)、B=corr(f,m)、C=corr(f²,m) 之中，
+    影像側 f、f² 在 270 個姿態間完全不變，但 `cv2.matchTemplate` 每次呼叫都重算
+    f/f² 的 FFT。此處把 F=DFT(f)、F2=DFT(f²) 預算一次，之後每姿態只需轉換小核
+    （t·m 與 m）即可，省下絕大多數重複的影像 FFT（實測階段A ~1.8-2×）。
+    """
+    H, W = f.shape
+    Nh = cv2.getOptimalDFTSize(H)
+    Nw = cv2.getOptimalDFTSize(W)
+    fp = np.zeros((Nh, Nw), np.float32)
+    fp[:H, :W] = f
+    f2p = np.zeros((Nh, Nw), np.float32)
+    f2p[:H, :W] = f2
+    return {
+        "H": H, "W": W, "Nh": Nh, "Nw": Nw,
+        "F": cv2.dft(fp, flags=cv2.DFT_COMPLEX_OUTPUT),
+        "F2": cv2.dft(f2p, flags=cv2.DFT_COMPLEX_OUTPUT),
+    }
+
+
+def _xcorr_ctx(ctx: Dict[str, Any], img_spec: np.ndarray, ker_spec: np.ndarray, kh: int, kw: int) -> np.ndarray:
+    """以預算頻譜計算「有效區」交叉相關，等價於 cv2.matchTemplate(., ., TM_CCORR)。
+
+    對 (Nh,Nw) 做循環相關：模板零填於左上、影像零填於右下時，有效區
+    [0:H-kh+1, 0:W-kw+1] 不會回繞，故與 matchTemplate 的有效輸出逐點相同。
+    """
+    prod = cv2.mulSpectrums(img_spec, ker_spec, 0, conjB=True)
+    corr = cv2.idft(prod, flags=cv2.DFT_REAL_OUTPUT | cv2.DFT_SCALE)
+    return corr[:ctx["H"] - kh + 1, :ctx["W"] - kw + 1]
+
+
+def _masked_zncc_map_ctx(ctx: Dict[str, Any], t: np.ndarray, m: np.ndarray) -> Optional[np.ndarray]:
+    """帶遮罩 ZNCC，但影像側 FFT 取自預算的 ctx（與 `_masked_zncc_map` 數學等價）。
+
+    僅用於階段A 全圖掃描（f/f² 固定）。階段B 的小 ROI 因影像每次不同，仍用原
+    `_masked_zncc_map`（matchTemplate 路徑），保持位元不變。
+    """
+    n = float(m.sum())
+    if n < 50:
+        return None
+    tm = t * m
+    kh, kw = m.shape  # 旋轉後模板與遮罩同形
+    Nh, Nw = ctx["Nh"], ctx["Nw"]
+    tm_p = np.zeros((Nh, Nw), np.float32)
+    tm_p[:kh, :kw] = tm
+    m_p = np.zeros((Nh, Nw), np.float32)
+    m_p[:kh, :kw] = m
+    tm_spec = cv2.dft(tm_p, flags=cv2.DFT_COMPLEX_OUTPUT)
+    m_spec = cv2.dft(m_p, flags=cv2.DFT_COMPLEX_OUTPUT)
+    A = _xcorr_ctx(ctx, ctx["F"], tm_spec, kh, kw)   # Σ m·t·w
+    B = _xcorr_ctx(ctx, ctx["F"], m_spec, kh, kw)    # Σ m·w
+    C = _xcorr_ctx(ctx, ctx["F2"], m_spec, kh, kw)   # Σ m·w² (B、C 共用 m_spec)
+    st = float(tm.sum())
+    st2 = float((tm * t).sum())
+    num = A - B * (st / n)
+    var_f = np.maximum(C - (B * B) / n, 0.0)
+    var_t = max(st2 - st * st / n, 1e-6)
+    return np.clip(num / (np.sqrt(var_f * var_t) + 1e-6), -1.0, 1.0)
+
+
 def _rotate_template(t: np.ndarray, m0: np.ndarray, pw: int, ph: int, a: float) -> Tuple[np.ndarray, np.ndarray, int, int]:
     """將模板與遮罩旋轉 a 度，回傳 (旋轉模板 rt, 二值遮罩 m(float32), rw, rh)。"""
     M = cv2.getRotationMatrix2D((pw / 2.0, ph / 2.0), float(a), 1.0)
@@ -228,9 +290,16 @@ def _rotate_template(t: np.ndarray, m0: np.ndarray, pw: int, ph: int, a: float) 
 
 
 def _score_pose(f: np.ndarray, f2: Optional[np.ndarray], rt: np.ndarray,
-                m: np.ndarray, use_zncc: bool) -> Optional[np.ndarray]:
-    """對單一旋轉姿態計算分數圖：高紋理用帶遮罩 ZNCC，低紋理退用彩色帶遮罩 CCORR_NORMED。"""
+                m: np.ndarray, use_zncc: bool,
+                ctx: Optional[Dict[str, Any]] = None) -> Optional[np.ndarray]:
+    """對單一旋轉姿態計算分數圖：高紋理用帶遮罩 ZNCC，低紋理退用彩色帶遮罩 CCORR_NORMED。
+
+    ctx 提供時（階段A，f/f² 固定）走預算 FFT 重用路徑加速；ctx=None 時（階段B 小 ROI）
+    走原 matchTemplate 路徑，與既有行為位元相同。
+    """
     if use_zncc:
+        if ctx is not None:
+            return _masked_zncc_map_ctx(ctx, rt, m)
         return _masked_zncc_map(f, f2, rt, m)
     rt = rt.copy()
     rt[m < 0.5] = 0
@@ -295,9 +364,11 @@ def _global_pose_sweep(
     if use_zncc:
         f = cv2.cvtColor(ref_s, cv2.COLOR_BGR2GRAY).astype(np.float32)
         f2 = f * f
+        corr_ctx = _build_corr_ctx(f, f2)  # 階段A 全圖掃描重用的預算 FFT
     else:
         f = ref_s  # 彩色 CCORR_NORMED 模式
         f2 = None
+        corr_ctx = None
 
     RH, RW = ref_s.shape[:2]
     acc = np.full((RH, RW), -2.0, np.float32)
@@ -336,7 +407,7 @@ def _global_pose_sweep(
             rt, m, rw, rh = _rotate_template(tmpl, m0, pw, ph, float(a))
             if rw >= RW or rh >= RH or m.sum() < 50:
                 continue
-            z = _score_pose(f, f2, rt, m, use_zncc)
+            z = _score_pose(f, f2, rt, m, use_zncc, ctx=corr_ctx)
             if z is None:
                 continue
             _accumulate(z, rw, rh, a, ds)
