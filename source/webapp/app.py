@@ -50,6 +50,36 @@ def _pil_to_bgr(im: Image.Image) -> np.ndarray:
     return cv2.cvtColor(np.array(im), cv2.COLOR_RGB2BGR)
 
 
+# 影像為內容不可變資源（reference 固定、piece 以 id 為鍵），可長快取避免手機重抓。
+_IMG_CACHE_HEADERS = {"Cache-Control": "public, max-age=31536000, immutable"}
+# 允許的縮圖寬度（白名單，避免任意寬度造成磁碟快取爆量）。
+_THUMB_WIDTHS = (150, 200, 400, 900)
+
+
+def _serve_image(path: Path, w: Optional[int]) -> FileResponse:
+    """提供影像並帶長快取標頭；指定合法寬度 w 時回傳磁碟快取的縮圖。
+
+    縮圖以 `<stem>.t{w}.jpg` 存在原圖旁，首次請求生成、之後直接命中；不放大
+    （原圖比 w 窄時直接回原圖）。生成失敗則退回原圖，不影響可用性。
+    """
+    if w in _THUMB_WIDTHS:
+        thumb = path.with_name(f"{path.stem}.t{w}.jpg")
+        if not thumb.exists():
+            try:
+                im = Image.open(path)
+                if im.width > w:
+                    im = im.convert("RGB")
+                    h = round(im.height * w / im.width)
+                    im = im.resize((w, h), Image.LANCZOS)
+                    im.save(thumb, "JPEG", quality=80)
+                else:
+                    thumb = path  # 原圖已夠小，不縮
+            except Exception:
+                thumb = path  # 縮圖失敗退回原圖
+        return FileResponse(thumb, headers=_IMG_CACHE_HEADERS)
+    return FileResponse(path, headers=_IMG_CACHE_HEADERS)
+
+
 def create_app(
     data_root: Path | str | None = None,
     static_dir: Path | str | None = None,
@@ -133,14 +163,14 @@ def create_app(
         return {"ok": True}
 
     @app.get("/api/projects/{pid}/reference")
-    def get_reference(pid: int):
+    def get_reference(pid: int, w: Optional[int] = None):
         proj = store.get_project(pid)
         if not proj:
             raise HTTPException(status_code=404, detail="找不到專案")
         path = store.reference_path(pid, proj["reference_ext"])
         if not path.exists():
             raise HTTPException(status_code=404, detail="完成圖遺失")
-        return FileResponse(path)
+        return _serve_image(path, w)
 
     # ---------- 定位 ----------
     @app.post("/api/projects/{pid}/locate")
@@ -196,14 +226,14 @@ def create_app(
         }
 
     @app.get("/api/projects/{pid}/pieces/{piece_id}/image")
-    def get_piece_image(pid: int, piece_id: int):
+    def get_piece_image(pid: int, piece_id: int, w: Optional[int] = None):
         piece = store.get_piece(pid, piece_id)
         if not piece:
             raise HTTPException(status_code=404, detail="找不到單片")
         path = store.piece_path(pid, piece_id, piece["image_ext"])
         if not path.exists():
             raise HTTPException(status_code=404, detail="單片影像遺失")
-        return FileResponse(path)
+        return _serve_image(path, w)
 
     @app.post("/api/projects/{pid}/pieces/{piece_id}/confirm")
     def confirm_piece(
