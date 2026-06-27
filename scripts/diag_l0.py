@@ -77,7 +77,7 @@ def diag_piece(path, gt_col, gt_row):
     na = cv2.resize(pa, (nb.shape[1], nb.shape[0]), interpolation=cv2.INTER_NEAREST)
     tstd = float(cv2.cvtColor(nb, cv2.COLOR_BGR2GRAY)[na > 127].std())
 
-    acc, pose_map, pose_table, RS = L._global_pose_sweep(ref, nb, na, 1.0, L_grid, ROWS, COLS, gw, gh)
+    acc, pose_map, pose_table, RS, *_ = L._global_pose_sweep(ref, nb, na, 1.0, L_grid, ROWS, COLS, gw, gh)
     ghs, gws = gh * RS, gw * RS; cells = []
     for r in range(1, ROWS + 1):
         for c in range(1, COLS + 1):

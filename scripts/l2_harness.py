@@ -62,7 +62,7 @@ def cases():
 def build():
     for p, c, r in cases():
         nb, na = normalize(p)
-        acc, pose_map, pose_table, RS = L._global_pose_sweep(ref, nb, na, 1.0, L_grid, ROWS, COLS, gw, gh)
+        acc, pose_map, pose_table, RS, *_ = L._global_pose_sweep(ref, nb, na, 1.0, L_grid, ROWS, COLS, gw, gh)
         ghs, gws = gh * RS, gw * RS; cells = []
         for rr in range(1, ROWS + 1):
             for cc in range(1, COLS + 1):
