@@ -252,6 +252,9 @@ class Store:
         self._conn.commit()
         p = self.piece_path(project_id, piece_id, row["image_ext"])
         p.unlink(missing_ok=True)
+        # 連同 _serve_image 產生的縮圖（piece_{id}.t{w}.jpg）一併清掉
+        for thumb in self.project_dir(project_id).glob(f"piece_{piece_id}.t*.jpg"):
+            thumb.unlink(missing_ok=True)
         return True
 
     def confirmed_cells(self, project_id: int) -> list[dict]:
